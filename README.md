@@ -1,6 +1,8 @@
 # Tagged Instant Lightweight Emacs Snippets (TILES)
 
-TILES is an Emacs package for taking quick, title-less notes. Each note (or *tile*, if you will) is a single paragraph stored in its own org file, organized through tags and bold keywords rather than hierarchies. TILES tries to keep it simple: there are no dependencies (except for Emacs, version 27.1 at least), no links between notes (except the [Org Mode](https://orgmode.org/org.html) syntax), no backlinks, no graphs, no database; every note is a paragraph in its own text file.
+TILES is an Emacs package for taking quick, title-less notes. 
+
+Each note (or *tile*, if you will) is a single paragraph stored in its own org file, organized through tags and bold keywords rather than hierarchies. TILES tries to keep it simple: there are no dependencies (except for Emacs, version 27.1 at least), no links between notes (except the [Org Mode](https://orgmode.org/org.html) syntax), no backlinks, no graphs, no database; every note is a paragraph in its own text file.
 
 I created this package because I wanted a note taking system with the following features:
 
