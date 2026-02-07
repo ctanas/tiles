@@ -16,6 +16,12 @@ I created this package because I wanted a note taking system with the following 
 - no external dependencies needed except at least version 27.1 of Emacs and Org Mode (built-in);
 - uses [Org Mode](https://orgmode.org/org.html) format for bold, italic, links, in-line footnotes;
 
+## Screenshots
+
+<img width="1453" height="765" alt="Screenshot 2026-02-07 at 14 08 18" src="https://github.com/user-attachments/assets/59752a09-63ba-40b3-9ab4-15f65c30a4ed" />
+<img width="1456" height="762" alt="Screenshot 2026-02-07 at 14 07 29" src="https://github.com/user-attachments/assets/e20ee23f-3a80-4743-8f22-fbe10bd99d1b" />
+<img width="1458" height="763" alt="Screenshot 2026-02-07 at 14 07 08" src="https://github.com/user-attachments/assets/fde720c4-c626-4917-bc93-690cb30623d3" />
+
 ## Note format
 
 Each note is a file named `TYYYYMMDDHHMMSS.org` (T followed by a timestamp up to seconds) and stored in a predefined folder:
