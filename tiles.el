@@ -154,7 +154,7 @@ Press `+' to load the next batch.  Set to nil for unlimited."
   :type '(choice integer (const nil))
   :group 'tiles)
 
-(defcustom tiles-show-lunar t
+(defcustom tiles-show-lunar nil
   "When non-nil, show days until next New Moon or Full Moon in the dashboard header."
   :type 'boolean
   :group 'tiles)
