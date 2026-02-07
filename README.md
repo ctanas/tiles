@@ -6,13 +6,14 @@ I created this package because I wanted a note taking system with the following 
 
 - focus on one paragraph (like [Logseq](https://logseq.com)): one paragraph = one note;
 - offers a bird's-eye view (quick preview) of recent notes (similar to [Howm](https://kaorahi.github.io/howm));
+- quick note preview, quick note edit;
 - color coding depending on the note's age (sort of like [Howm](https://kaorahi.github.io/howm), but not really);
-- title-less, to reduce friction (why having to stop the thought process to create a title?);
-- can use the Dynamic Block features in Org Mode (like [Denote](https://protesilaos.com/emacs/denote) and [Denote Org](https://protesilaos.com/emacs/denote-org));
-- can stitch notes together, after applying a search filter (like [Howm](https://kaorahi.github.io/howm/), ideal if you want to use your notes to create other documents);
+- title-less, to reduce friction (why having to stop the thought process to create a title that's never used afterwards?);
+- can use the Dynamic Block features in Org Mode (like [Denote](https://protesilaos.com/emacs/denote) and [Denote Org](https://protesilaos.com/emacs/denote-org), ideal if you want to use your notes to create other documents;
+- can stitch notes together, after applying a search filter (like [Howm](https://kaorahi.github.io/howm), ideal if you want to use your notes to create other documents;
 - uses tags for hierarchy but also uses bold keywords (extracted automatically from words that are marked as bold);
 - search after tags and/or keywords only (who really wants to search for anything else?);
-- no external dependencies needed;
+- no external dependencies needed except at least version 27.1 of Emacs and Org Mode (built-in);
 - uses [Org Mode](https://orgmode.org/org.html) format for bold, italic, links, in-line footnotes;
 
 ## Note format
