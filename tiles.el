@@ -1081,7 +1081,7 @@ Shows a dashboard with statistics and note listing."
                  (eq-line (concat "  " (make-string (- tiles--line-target-width 2) ?=) "\n"))
                  (dash-line (concat "  " (make-string (- tiles--line-target-width 2) ?-) "\n\n")))
             (goto-char (point-min))
-            (insert (propertize title 'face 'font-lock-comment-face 'tiles-header t)
+            (insert (propertize title 'tiles-header t)
                     (propertize eq-line 'face 'font-lock-comment-face 'tiles-header t)
                     (propertize keys 'face 'font-lock-comment-face 'tiles-header t)
                     (if lunar
