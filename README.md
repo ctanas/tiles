@@ -282,6 +282,7 @@ Example:
 
 ## Changelog
 
+- **0.3.2** — Interactive tag/keyword list buffers with navigable selection and RET to filter dashboard. Dashboard keybinding refresh: `T` list tags, `K` list keywords, `u` touch. Stitch confirmation when no filter is active. Renamed to Snippets (plural).
 - **0.3.1** — Red `&` indicator in formatted preview for notes with private paragraphs. New `tiles-list-tags` and `tiles-list-keywords` commands to browse all unique tags/keywords (with bold cross-highlighting).
 - **0.3** — Private paragraphs: paragraphs starting with `&&` are hidden from dashboard previews, stitched views, search panels, and dynamic blocks. Only visible via `TAB` expansion in the dashboard or direct file editing.
 - **0.2** — Initial public release.

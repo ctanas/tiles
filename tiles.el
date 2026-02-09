@@ -4,7 +4,7 @@
 ;; distributed under the terms of the GNU General Public License (Version 3, 29 June 2007)
 
 ;; Author: Claudiu Tănăselia
-;; Version: 0.3.1
+;; Version: 0.3.2
 ;; Package-Requires: ((emacs "27.1"))
 ;; Keywords: notes, org
 ;; URL: https://github.com/ctanas/tiles
