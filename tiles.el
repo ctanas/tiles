@@ -610,6 +610,9 @@ QUERY is a space-separated list of keywords (OR logic)."
     (define-key map (kbd "n") #'tiles-list-next)
     (define-key map (kbd "p") #'tiles-list-prev)
     (define-key map (kbd "RET") #'tiles-list-select)
+    (define-key map (kbd "o") #'tiles-list-sort-occurrence)
+    (define-key map (kbd "a") #'tiles-list-sort-alpha)
+    (define-key map (kbd "d") #'tiles-list-toggle-direction)
     (define-key map (kbd "q") #'quit-window)
     map)
   "Keymap for `tiles-list-mode'.")
@@ -620,6 +623,52 @@ QUERY is a space-separated list of keywords (OR logic)."
   (setq truncate-lines t)
   (face-remap-add-relative 'hl-line 'tiles-notes-hl-line)
   (hl-line-mode 1))
+
+(defvar-local tiles--list-type nil "Type of list: `tag' or `keyword'.")
+(defvar-local tiles--list-items nil "Hash table of items to counts.")
+(defvar-local tiles--list-cross nil "Hash table of cross-reference items.")
+(defvar-local tiles--list-sort 'alpha "Current sort: `alpha' or `occurrence'.")
+(defvar-local tiles--list-descending nil "When non-nil, sort in descending order.")
+
+(defun tiles--list-render ()
+  "Re-render the current list buffer with current sort settings."
+  (let* ((items tiles--list-items)
+         (cross tiles--list-cross)
+         (sort-type tiles--list-sort)
+         (desc tiles--list-descending)
+         (type tiles--list-type)
+         (type-label (if (eq type 'tag) "tags" "keywords"))
+         (keys (hash-table-keys items))
+         (sorted (if (eq sort-type 'occurrence)
+                     (sort keys (if desc
+                                    (lambda (a b)
+                                      (let ((ca (gethash a items))
+                                            (cb (gethash b items)))
+                                        (if (= ca cb) (string< a b) (> ca cb))))
+                                  (lambda (a b)
+                                    (let ((ca (gethash a items))
+                                          (cb (gethash b items)))
+                                      (if (= ca cb) (string< a b) (< ca cb))))))
+                   (sort keys (if desc #'string> #'string<))))
+         (sort-label (format "%s %s"
+                             (if (eq sort-type 'alpha) "alphabetical" "by occurrence")
+                             (if desc "descending" "ascending")))
+         (inhibit-read-only t))
+    (erase-buffer)
+    (insert (propertize (format "%d unique %s  [%s]  (RET:search  o:sort occurrence  a:sort alpha  d:toggle direction  q:quit)\n\n"
+                                (length keys) type-label sort-label)
+                        'face 'font-lock-comment-face
+                        'tiles-header t))
+    (dolist (item sorted)
+      (let ((count (gethash item items))
+            (is-cross (gethash item cross)))
+        (insert (format "[%d] " count)
+                (if is-cross
+                    (propertize item 'face 'bold)
+                  item)
+                "\n")))
+    (goto-char (point-min))
+    (forward-line 2)))
 
 (defun tiles-list-next ()
   "Move to the next item in the list."
@@ -637,14 +686,51 @@ QUERY is a space-separated list of keywords (OR logic)."
 (defun tiles-list-select ()
   "Search the dashboard for the item on the current line."
   (interactive)
-  (let ((item (string-trim (buffer-substring-no-properties
+  (let* ((raw (string-trim (buffer-substring-no-properties
                             (line-beginning-position) (line-end-position))))
-        (type (buffer-local-value 'tiles--list-type (current-buffer))))
+         (item (if (string-match "^\\[[0-9]+\\] \\(.*\\)" raw)
+                   (match-string 1 raw)
+                 raw))
+         (type (buffer-local-value 'tiles--list-type (current-buffer))))
     (when (and item (not (string-empty-p item)))
       (quit-window)
       (setq tiles--notes-page 0)
       (setq tiles--notes-filter (cons type item))
       (tiles-show-notes))))
+
+(defun tiles-list-sort-occurrence ()
+  "Sort the list by occurrence count (high to low by default)."
+  (interactive)
+  (setq tiles--list-sort 'occurrence)
+  (setq tiles--list-descending t)
+  (tiles--list-render))
+
+(defun tiles-list-sort-alpha ()
+  "Sort the list alphabetically (a-z by default)."
+  (interactive)
+  (setq tiles--list-sort 'alpha)
+  (setq tiles--list-descending nil)
+  (tiles--list-render))
+
+(defun tiles-list-toggle-direction ()
+  "Toggle between ascending and descending sort."
+  (interactive)
+  (setq tiles--list-descending (not tiles--list-descending))
+  (tiles--list-render))
+
+(defun tiles--list-collect-data ()
+  "Collect tag and keyword counts from all notes.
+Returns (tags-hash . keywords-hash) where values are counts."
+  (let ((all-tags (make-hash-table :test 'equal))
+        (all-keywords (make-hash-table :test 'equal)))
+    (dolist (file (tiles--get-all-tile-files))
+      (let ((note-data (tiles--parse-note-file file)))
+        (when note-data
+          (dolist (tag (plist-get note-data :tags))
+            (puthash tag (1+ (gethash tag all-tags 0)) all-tags))
+          (dolist (kw (plist-get note-data :keywords))
+            (puthash kw (1+ (gethash kw all-keywords 0)) all-keywords)))))
+    (cons all-tags all-keywords)))
 
 ;;;###autoload
 (defun tiles-list-tags ()
@@ -652,35 +738,17 @@ QUERY is a space-separated list of keywords (OR logic)."
 Tags that also appear as keywords are shown in bold.
 Press RET to filter the dashboard by the selected tag."
   (interactive)
-  (let* ((files (tiles--get-all-tile-files))
-         (all-tags (make-hash-table :test 'equal))
-         (all-keywords (make-hash-table :test 'equal)))
-    (dolist (file files)
-      (let ((note-data (tiles--parse-note-file file)))
-        (when note-data
-          (dolist (tag (plist-get note-data :tags))
-            (puthash tag t all-tags))
-          (dolist (kw (plist-get note-data :keywords))
-            (puthash kw t all-keywords)))))
-    (let ((tags (sort (hash-table-keys all-tags) #'string<))
-          (buf (get-buffer-create "*Tiles Tags*")))
-      (with-current-buffer buf
-        (let ((inhibit-read-only t))
-          (erase-buffer)
-          (insert (propertize (format "%d unique tags  (RET:search  q:quit)\n\n"
-                                      (length tags))
-                              'face 'font-lock-comment-face
-                              'tiles-header t))
-          (dolist (tag tags)
-            (insert (if (gethash tag all-keywords)
-                        (propertize tag 'face 'bold)
-                      tag)
-                    "\n")))
-        (tiles-list-mode)
-        (setq-local tiles--list-type 'tag)
-        (goto-char (point-min))
-        (forward-line 2))
-      (switch-to-buffer buf))))
+  (let* ((data (tiles--list-collect-data))
+         (buf (get-buffer-create "*Tiles Tags*")))
+    (with-current-buffer buf
+      (tiles-list-mode)
+      (setq-local tiles--list-type 'tag)
+      (setq-local tiles--list-items (car data))
+      (setq-local tiles--list-cross (cdr data))
+      (setq-local tiles--list-sort 'alpha)
+      (setq-local tiles--list-descending nil)
+      (tiles--list-render))
+    (switch-to-buffer buf)))
 
 ;;;###autoload
 (defun tiles-list-keywords ()
@@ -688,35 +756,17 @@ Press RET to filter the dashboard by the selected tag."
 Keywords that also appear as tags are shown in bold.
 Press RET to filter the dashboard by the selected keyword."
   (interactive)
-  (let* ((files (tiles--get-all-tile-files))
-         (all-tags (make-hash-table :test 'equal))
-         (all-keywords (make-hash-table :test 'equal)))
-    (dolist (file files)
-      (let ((note-data (tiles--parse-note-file file)))
-        (when note-data
-          (dolist (tag (plist-get note-data :tags))
-            (puthash tag t all-tags))
-          (dolist (kw (plist-get note-data :keywords))
-            (puthash kw t all-keywords)))))
-    (let ((keywords (sort (hash-table-keys all-keywords) #'string<))
-          (buf (get-buffer-create "*Tiles Keywords*")))
-      (with-current-buffer buf
-        (let ((inhibit-read-only t))
-          (erase-buffer)
-          (insert (propertize (format "%d unique keywords  (RET:search  q:quit)\n\n"
-                                      (length keywords))
-                              'face 'font-lock-comment-face
-                              'tiles-header t))
-          (dolist (kw keywords)
-            (insert (if (gethash kw all-tags)
-                        (propertize kw 'face 'bold)
-                      kw)
-                    "\n")))
-        (tiles-list-mode)
-        (setq-local tiles--list-type 'keyword)
-        (goto-char (point-min))
-        (forward-line 2))
-      (switch-to-buffer buf))))
+  (let* ((data (tiles--list-collect-data))
+         (buf (get-buffer-create "*Tiles Keywords*")))
+    (with-current-buffer buf
+      (tiles-list-mode)
+      (setq-local tiles--list-type 'keyword)
+      (setq-local tiles--list-items (cdr data))
+      (setq-local tiles--list-cross (car data))
+      (setq-local tiles--list-sort 'alpha)
+      (setq-local tiles--list-descending nil)
+      (tiles--list-render))
+    (switch-to-buffer buf)))
 
 ;;; Notes Viewer
 
