@@ -605,10 +605,52 @@ QUERY is a space-separated list of keywords (OR logic)."
         (tiles--show-search-view results)
       (message "No matching notes found for keywords: %s" query))))
 
+(defvar tiles-list-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "n") #'tiles-list-next)
+    (define-key map (kbd "p") #'tiles-list-prev)
+    (define-key map (kbd "RET") #'tiles-list-select)
+    (define-key map (kbd "q") #'quit-window)
+    map)
+  "Keymap for `tiles-list-mode'.")
+
+(define-derived-mode tiles-list-mode special-mode "Tiles-List"
+  "Major mode for browsing TILES tags or keywords."
+  (setq-local cursor-type 'box)
+  (setq truncate-lines t)
+  (face-remap-add-relative 'hl-line 'tiles-notes-hl-line)
+  (hl-line-mode 1))
+
+(defun tiles-list-next ()
+  "Move to the next item in the list."
+  (interactive)
+  (forward-line 1)
+  (when (eobp) (forward-line -1)))
+
+(defun tiles-list-prev ()
+  "Move to the previous item in the list."
+  (interactive)
+  (forward-line -1)
+  (when (get-text-property (point) 'tiles-header)
+    (forward-line 1)))
+
+(defun tiles-list-select ()
+  "Search the dashboard for the item on the current line."
+  (interactive)
+  (let ((item (string-trim (buffer-substring-no-properties
+                            (line-beginning-position) (line-end-position))))
+        (type (buffer-local-value 'tiles--list-type (current-buffer))))
+    (when (and item (not (string-empty-p item)))
+      (quit-window)
+      (setq tiles--notes-page 0)
+      (setq tiles--notes-filter (cons type item))
+      (tiles-show-notes))))
+
 ;;;###autoload
 (defun tiles-list-tags ()
-  "Display all unique tags across all notes in a read-only buffer.
-Tags that also appear as keywords are shown in bold."
+  "Display all unique tags across all notes in a navigable buffer.
+Tags that also appear as keywords are shown in bold.
+Press RET to filter the dashboard by the selected tag."
   (interactive)
   (let* ((files (tiles--get-all-tile-files))
          (all-tags (make-hash-table :test 'equal))
@@ -625,20 +667,26 @@ Tags that also appear as keywords are shown in bold."
       (with-current-buffer buf
         (let ((inhibit-read-only t))
           (erase-buffer)
-          (insert (format "%d unique tags\n\n" (length tags)))
+          (insert (propertize (format "%d unique tags  (RET:search  q:quit)\n\n"
+                                      (length tags))
+                              'face 'font-lock-comment-face
+                              'tiles-header t))
           (dolist (tag tags)
             (insert (if (gethash tag all-keywords)
                         (propertize tag 'face 'bold)
                       tag)
                     "\n")))
+        (tiles-list-mode)
+        (setq-local tiles--list-type 'tag)
         (goto-char (point-min))
-        (special-mode))
+        (forward-line 2))
       (switch-to-buffer buf))))
 
 ;;;###autoload
 (defun tiles-list-keywords ()
-  "Display all unique keywords across all notes in a read-only buffer.
-Keywords that also appear as tags are shown in bold."
+  "Display all unique keywords across all notes in a navigable buffer.
+Keywords that also appear as tags are shown in bold.
+Press RET to filter the dashboard by the selected keyword."
   (interactive)
   (let* ((files (tiles--get-all-tile-files))
          (all-tags (make-hash-table :test 'equal))
@@ -655,14 +703,19 @@ Keywords that also appear as tags are shown in bold."
       (with-current-buffer buf
         (let ((inhibit-read-only t))
           (erase-buffer)
-          (insert (format "%d unique keywords\n\n" (length keywords)))
+          (insert (propertize (format "%d unique keywords  (RET:search  q:quit)\n\n"
+                                      (length keywords))
+                              'face 'font-lock-comment-face
+                              'tiles-header t))
           (dolist (kw keywords)
             (insert (if (gethash kw all-tags)
                         (propertize kw 'face 'bold)
                       kw)
                     "\n")))
+        (tiles-list-mode)
+        (setq-local tiles--list-type 'keyword)
         (goto-char (point-min))
-        (special-mode))
+        (forward-line 2))
       (switch-to-buffer buf))))
 
 ;;; Notes Viewer
@@ -687,7 +740,9 @@ Keywords that also appear as tags are shown in bold."
     (define-key map (kbd "<M-up>") #'tiles-notes-move-up)
     (define-key map (kbd "<M-down>") #'tiles-notes-move-down)
     (define-key map (kbd "f") #'tiles-notes-toggle-raw)
-    (define-key map (kbd "T") #'tiles-notes-touch)
+    (define-key map (kbd "T") #'tiles-list-tags)
+    (define-key map (kbd "K") #'tiles-list-keywords)
+    (define-key map (kbd "u") #'tiles-notes-touch)
     (define-key map (kbd "+") #'tiles-notes-load-more)
     (define-key map (kbd "0") #'tiles-notes-stitch)
     (define-key map (kbd "l") #'tiles-new)
@@ -966,20 +1021,23 @@ Shows a dashboard with statistics and note listing."
                               ""))
                  (title (format "  *T*agged *I*nstant *L*ightweight *E*macs *S*nippet (TILES) | %d notes | loaded in %.3fs%s%s\n"
                                 num-all load-time filter-info page-info))
-                 (keys "  SPC:preview  RET:open  TAB:expand  0:stitch  d:date  D:delete  t:filter tag  k:filter keyword  c:clear  f:toggle  l:new  g:refresh  q:quit\n")
+                 (keys (concat "  [SPC] preview, [RET] open, [TAB] expand, [f] format toggle, [d] change date, [u] touch, [D] delete, [+] load more, [q] quit\n"
+                               "  [0] stitch, [g] refresh, [t] filter tag, [k] filter keyword, [T] list tags, [K] list keywords, [c] clear search, [l] new tile\n"))
                  (lunar (when tiles-show-lunar
                           (condition-case nil
                               (let ((info (tiles--next-lunar-event)))
                                 (when info (format "  %s\n" info)))
                             (error nil))))
-                 (sep (concat "  " (make-string (- tiles--line-target-width 2) ?=) "\n\n")))
+                 (eq-line (concat "  " (make-string (- tiles--line-target-width 2) ?=) "\n"))
+                 (dash-line (concat "  " (make-string (- tiles--line-target-width 2) ?-) "\n\n")))
             (goto-char (point-min))
             (insert (propertize title 'face 'font-lock-comment-face 'tiles-header t)
+                    (propertize eq-line 'face 'font-lock-comment-face 'tiles-header t)
                     (propertize keys 'face 'font-lock-comment-face 'tiles-header t)
                     (if lunar
                         (propertize lunar 'face 'font-lock-comment-face 'tiles-header t)
                       "")
-                    (propertize sep 'face 'font-lock-comment-face 'tiles-header t))))
+                    (propertize dash-line 'face 'font-lock-comment-face 'tiles-header t))))
         (tiles-notes-view-mode)
         ;; Move past header to first note line
         (goto-char (point-min))
@@ -1234,9 +1292,13 @@ Shows a dashboard with statistics and note listing."
   (let ((files (tiles--notes-displayed-files)))
     (if (not files)
         (message "No notes to stitch")
-      (tiles-notes-quit)
-      (setq tiles--current-search-results files)
-      (tiles--show-stitched-view files))))
+      (if (or tiles--notes-filter
+              (yes-or-no-p "You should perform a search before stitching notes. Are you sure you want to stitch ALL the notes? "))
+          (progn
+            (tiles-notes-quit)
+            (setq tiles--current-search-results files)
+            (tiles--show-stitched-view files))
+        (message nil)))))
 
 (defun tiles-notes-change-date ()
   "Change the date/time of the note on the current line.

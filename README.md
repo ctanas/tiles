@@ -80,9 +80,11 @@ All commands are under the `C-c m` prefix:
 `C-c m m` launches the dashboard, which displays a chronological list of all notes. Each entry shows color-coded timestamps (showing hours and minutes to save space), inline previews, tags, and keywords. Timestamps are color-coded: green for today, darker green for recent (< 2 weeks), faded grey for older notes. The selection highlight is Lufthansa yellow. While the dashboard displays truncated timestamps for brevity, the actual filenames include timestamps down to the second level, allowing you to create multiple notes within the same minute without conflicts.
 
 ```
-  *T*agged *I*nstant *L*ightweight *E*macs *S*nippet (TILES) | 42 notes | loaded in 0.023s
-  SPC:preview  RET:open  d:change date  t:filter tag  k:filter keyword  c:clear filter  g:refresh  q:quit
+  *T*agged *I*nstant *L*ightweight *E*macs *S*nippets (TILES) | 42 notes | loaded in 0.023s
   ========================================================================
+  [SPC] preview, [RET] open, [TAB] expand, [f] format toggle, [d] change date, [u] touch, [D] delete, [+] load more, [q] quit
+  [0] stitch, [g] refresh, [t] filter tag, [k] filter keyword, [T] list tags, [K] list keywords, [c] clear search, [l] new tile
+  ----------------------------------------------------------------------
 
   2026-02-06 08:12  Hello world, I'm the first tile!  meta/test
   2026-02-06 08:12  This note is ready for production  meta/prod
@@ -99,9 +101,12 @@ Dashboard keybindings:
 | `M-up`    | Move selected note up                         |
 | `M-down`  | Move selected note down                       |
 | `d`       | Change note date/timestamp (renames file)     |
+| `u`       | Touch (update timestamp to now)               |
 | `D`       | Delete note (with confirmation)               |
 | `t`       | Filter displayed notes by tag                 |
 | `k`       | Filter displayed notes by keyword             |
+| `T`       | List all tags                                 |
+| `K`       | List all keywords                             |
 | `c`       | Clear filter                                  |
 | `f`       | Toggle raw preview (strip org formatting)     |
 | `+`       | Load next batch of notes                      |
