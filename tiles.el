@@ -605,6 +605,66 @@ QUERY is a space-separated list of keywords (OR logic)."
         (tiles--show-search-view results)
       (message "No matching notes found for keywords: %s" query))))
 
+;;;###autoload
+(defun tiles-list-tags ()
+  "Display all unique tags across all notes in a read-only buffer.
+Tags that also appear as keywords are shown in bold."
+  (interactive)
+  (let* ((files (tiles--get-all-tile-files))
+         (all-tags (make-hash-table :test 'equal))
+         (all-keywords (make-hash-table :test 'equal)))
+    (dolist (file files)
+      (let ((note-data (tiles--parse-note-file file)))
+        (when note-data
+          (dolist (tag (plist-get note-data :tags))
+            (puthash tag t all-tags))
+          (dolist (kw (plist-get note-data :keywords))
+            (puthash kw t all-keywords)))))
+    (let ((tags (sort (hash-table-keys all-tags) #'string<))
+          (buf (get-buffer-create "*Tiles Tags*")))
+      (with-current-buffer buf
+        (let ((inhibit-read-only t))
+          (erase-buffer)
+          (insert (format "%d unique tags\n\n" (length tags)))
+          (dolist (tag tags)
+            (insert (if (gethash tag all-keywords)
+                        (propertize tag 'face 'bold)
+                      tag)
+                    "\n")))
+        (goto-char (point-min))
+        (special-mode))
+      (switch-to-buffer buf))))
+
+;;;###autoload
+(defun tiles-list-keywords ()
+  "Display all unique keywords across all notes in a read-only buffer.
+Keywords that also appear as tags are shown in bold."
+  (interactive)
+  (let* ((files (tiles--get-all-tile-files))
+         (all-tags (make-hash-table :test 'equal))
+         (all-keywords (make-hash-table :test 'equal)))
+    (dolist (file files)
+      (let ((note-data (tiles--parse-note-file file)))
+        (when note-data
+          (dolist (tag (plist-get note-data :tags))
+            (puthash tag t all-tags))
+          (dolist (kw (plist-get note-data :keywords))
+            (puthash kw t all-keywords)))))
+    (let ((keywords (sort (hash-table-keys all-keywords) #'string<))
+          (buf (get-buffer-create "*Tiles Keywords*")))
+      (with-current-buffer buf
+        (let ((inhibit-read-only t))
+          (erase-buffer)
+          (insert (format "%d unique keywords\n\n" (length keywords)))
+          (dolist (kw keywords)
+            (insert (if (gethash kw all-tags)
+                        (propertize kw 'face 'bold)
+                      kw)
+                    "\n")))
+        (goto-char (point-min))
+        (special-mode))
+      (switch-to-buffer buf))))
+
 ;;; Notes Viewer
 
 (defvar tiles--notes-buffer-name "*Tiles Notes*"

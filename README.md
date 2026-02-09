@@ -14,7 +14,7 @@ I created this package because I wanted a note taking system with the following 
 - can use the Dynamic Block features in Org Mode (like [Denote](https://protesilaos.com/emacs/denote) and [Denote Org](https://protesilaos.com/emacs/denote-org), ideal if you want to use your notes to create other documents;
 - can stitch notes together, after applying a search filter (like [Howm](https://kaorahi.github.io/howm), ideal if you want to use your notes to create other documents;
 - uses tags for hierarchy but also uses bold keywords (extracted automatically from words that are marked as bold);
-- can have follow-up text inside a note (and *undertile*, if you will), a kind of a meta-content, a private content inside a note, a paragraph prefixed with '&&' hidden everywhere (not exported with Dynamic Blocks actions) except expanded view in the dashboard and, of course, in note editing buffer;
+- can have follow-up text inside a note (and *undertile*, if you will), a kind of a meta-content (a private content inside a note), which is a paragraph prefixed with '&&' hidden everywhere (not exported with Dynamic Blocks actions) except expanded view in the dashboard and, of course, in note editing buffer;
 - search after tags and/or keywords only (who really wants to search for anything else?);
 - no external dependencies needed except at least version 27.1 of Emacs and Org Mode (built-in);
 - uses [Org Mode](https://orgmode.org/org.html) format for bold, italic, links, in-line footnotes;
@@ -110,6 +110,10 @@ Dashboard keybindings:
 | `g`       | Refresh                                       |
 | `q`       | Quit                                          |
 
+### Listing all tags and keywords
+
+`M-x tiles-list-tags` displays all unique tags across all notes in a read-only buffer, sorted alphabetically. `M-x tiles-list-keywords` does the same for bold keywords. In both buffers, items that appear in both sets (a tag that's also a keyword, or vice versa) are shown in **bold**, making it easy to spot overlaps.
+
 ### Tag search syntax
 
 Tag queries use `/` for **AND** and SPC for **OR**:
@@ -181,6 +185,8 @@ space/mars
 ```
 
 In the example above, the `&&` paragraph will not appear in previews or stitched output, but pressing `TAB` on this note in the dashboard will reveal it in the expanded area.
+
+When formatted preview is on (i.e., `tiles-preview-raw` is nil), notes containing private paragraphs display a red `&` indicator right before the preview text in the dashboard, so you can tell at a glance which notes have hidden content.
 
 ### Updating a note's timestamp
 
@@ -271,6 +277,7 @@ Example:
 
 ## Changelog
 
+- **0.3.1** — Red `&` indicator in formatted preview for notes with private paragraphs. New `tiles-list-tags` and `tiles-list-keywords` commands to browse all unique tags/keywords (with bold cross-highlighting).
 - **0.3** — Private paragraphs: paragraphs starting with `&&` are hidden from dashboard previews, stitched views, search panels, and dynamic blocks. Only visible via `TAB` expansion in the dashboard or direct file editing.
 - **0.2** — Initial public release.
 
