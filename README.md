@@ -21,9 +21,26 @@ I created this package because I wanted a note taking system with the following 
 
 ## Screenshots
 
-<img width="1458" height="763" alt="Screenshot 2026-02-07 at 14 07 08" src="https://github.com/user-attachments/assets/fde720c4-c626-4917-bc93-690cb30623d3" />
-<img width="1456" height="762" alt="Screenshot 2026-02-07 at 14 07 29" src="https://github.com/user-attachments/assets/e20ee23f-3a80-4743-8f22-fbe10bd99d1b" />
-<img width="1453" height="765" alt="Screenshot 2026-02-07 at 14 08 18" src="https://github.com/user-attachments/assets/59752a09-63ba-40b3-9ab4-15f65c30a4ed" />
+Dashboard for TILES, default view:
+<img width="1440" height="900" alt="Dashboard for TILES, default view" src="https://github.com/user-attachments/assets/fd944044-9d47-48e7-87af-d273bfe05a8f" />
+
+Dashboard with Org Mode markup toggled on (notice the red `&` character in front of a note, meaning there's some meta content there
+<img width="1440" height="900" alt="Dashboard with Org Mode markup toggled on" src="https://github.com/user-attachments/assets/7930165f-0b0c-47ce-b2a7-eb27c4801455" />
+
+A regular note, expanded to reveal the keywoards:
+<img width="1440" height="900" alt="Screenshot 2026-02-09 at 14 14 41" src="https://github.com/user-attachments/assets/438a2cca-7e8f-48df-a686-39df4b2841f5" />
+
+A note with meta-content, expanded to reveal the meta-content (meta-content is not exported, nor visible with stitching):
+<img width="1440" height="900" alt="Screenshot 2026-02-09 at 14 14 56" src="https://github.com/user-attachments/assets/1bf187fe-dfec-4ca8-b44a-8b3082c5a05e" />
+
+An example of a regular note, no title, Org Mode markup, tags on the last line (mandatory):
+<img width="2880" height="1800" alt="Screenshot 2026-02-09 at 14 15 27" src="https://github.com/user-attachments/assets/95150e31-c0ae-48ec-af5f-10b07016b8f8" />
+
+An example of a note with meta-content, added after main content, prefixed with `&&`:
+<img width="1440" height="900" alt="Screenshot 2026-02-09 at 14 16 00" src="https://github.com/user-attachments/assets/4a906c0e-3f4b-4224-9fda-cb75a75c1f2c" />
+
+The result of stitching all notes sharing the same keyword ("Falcon 9" in this case):
+<img width="1440" height="900" alt="Screenshot 2026-02-09 at 14 25 23" src="https://github.com/user-attachments/assets/4e7c94d7-a6f8-4c23-ad79-298cf0a3717c" />
 
 ## Note format
 
