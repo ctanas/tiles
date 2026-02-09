@@ -4,7 +4,7 @@
 ;; distributed under the terms of the GNU General Public License (Version 3, 29 June 2007)
 
 ;; Author: Claudiu Tănăselia
-;; Version: 0.3
+;; Version: 0.3.1
 ;; Package-Requires: ((emacs "27.1"))
 ;; Keywords: notes, org
 ;; URL: https://github.com/ctanas/tiles
@@ -1253,10 +1253,19 @@ Prompts for a new date in YYYY-MM-DD HH:MM or YYYY-MM-DD HH:MM:SS format."
          (tag-str (if tags (concat "  " (mapconcat #'identity tags "/")) ""))
          (preview-padded (if (< (length preview) tiles-preview-length)
                              (concat preview (make-string (- tiles-preview-length (length preview)) ?\s))
-                           preview)))
+                           preview))
+         (has-private (and (not tiles-preview-raw)
+                           note-data
+                           (let ((content (plist-get note-data :content)))
+                             (seq-some #'tiles--private-paragraph-p
+                                       (split-string (or content "") "\n\n+" t)))))
+         (separator (if has-private
+                        (concat " " (propertize "&" 'face 'tiles-tags))
+                      "  ")))
     (let* ((line (concat (propertize "  " 'tiles-filepath file)
                          (propertize timestamp 'face ts-face 'tiles-filepath file)
-                         (propertize (concat "  " preview-padded) 'tiles-filepath file)
+                         (propertize separator 'tiles-filepath file)
+                         (propertize preview-padded 'tiles-filepath file)
                          (propertize tag-str 'face 'tiles-tags 'tiles-filepath file)))
            (cur-len (length line)))
       (if (< cur-len tiles--line-target-width)
