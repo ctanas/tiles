@@ -4,7 +4,7 @@
 ;; distributed under the terms of the GNU General Public License (Version 3, 29 June 2007)
 
 ;; Author: Claudiu Tănăselia
-;; Version: 0.1
+;; Version: 0.3
 ;; Package-Requires: ((emacs "27.1"))
 ;; Keywords: notes, org
 ;; URL: https://github.com/ctanas/tiles
@@ -22,10 +22,16 @@
 ;;   /Italic/ and [[links]] are supported.  Inline footnotes[fn:: like
 ;;   this] are stripped from previews.
 ;;
+;;   && This is a private paragraph.  It is hidden from previews,
+;;   stitched views, and dynamic blocks.  Only visible when expanding
+;;   a note with TAB in the dashboard or editing the file directly.
+;;
 ;;   tag1/tag2/tag3
 ;;
 ;; The last non-empty line is always the tag line; everything above
 ;; (separated by a blank line) is content.  Multi-paragraph notes work.
+;; Paragraphs starting with && are private (hidden from all views
+;; except TAB expansion and direct editing).
 ;;
 ;; Features:
 ;; - Atomic notes: one paragraph per file, no titles needed
@@ -41,6 +47,8 @@
 ;; - Stitched view: search results as flowing text
 ;; - Quick capture via minibuffer (tiles-quick, tiles-yank)
 ;; - Touch command to bump a note's timestamp (tiles-touch)
+;; - Private paragraphs: && prefix hides content from all views
+;;   except TAB expansion and direct file editing
 ;; - In-memory cache with mtime invalidation for fast repeated access
 ;; - Org dynamic blocks for embedding note lists/contents in org files
 ;;
@@ -56,7 +64,7 @@
 ;;   n/p       - Navigate notes
 ;;   SPC       - Open editable preview split (updates on navigation)
 ;;   RET       - Open note file
-;;   TAB       - Toggle expanded view (keywords + stats)
+;;   TAB       - Toggle expanded view (private &&, keywords, stats)
 ;;   M-up/down - Reorder notes
 ;;   d         - Change note date/timestamp
 ;;   D         - Delete note (with confirmation)
@@ -66,6 +74,7 @@
 ;;   f         - Toggle raw preview (strip org formatting)
 ;;   +         - Load next batch of notes
 ;;   0         - Stitch displayed notes (respects reordering)
+;;   l         - New note (same as C-c m n)
 ;;   g         - Refresh
 ;;   q         - Quit
 ;;
@@ -118,6 +127,14 @@
 ;;   #+END:
 ;;
 ;; Update blocks with C-c C-x C-u, insert with C-c C-x x.
+;;
+;; Changelog:
+;;
+;;   0.3 - Private paragraphs: paragraphs starting with && are hidden
+;;         from dashboard previews, stitched views, search panels, and
+;;         dynamic blocks.  Only visible when expanding a note with TAB
+;;         in the dashboard or editing the file directly.
+;;   0.2 - Initial public release.
 
 ;;; Code:
 
@@ -154,7 +171,7 @@ Press `+' to load the next batch.  Set to nil for unlimited."
   :type '(choice integer (const nil))
   :group 'tiles)
 
-(defcustom tiles-show-lunar nil
+(defcustom tiles-show-lunar t
   "When non-nil, show days until next New Moon or Full Moon in the dashboard header."
   :type 'boolean
   :group 'tiles)
@@ -294,7 +311,8 @@ Everything before it (minus the trailing blank separator) is content."
       (let* ((paragraph (mapconcat #'identity paragraph-lines "\n"))
              (tags (when tag-line
                      (split-string tag-line "/" t "[ \t]+")))
-             (keywords (tiles--extract-keywords paragraph)))
+             (keywords (tiles--extract-keywords
+                       (tiles--strip-private-paragraphs paragraph))))
         (list :content paragraph
               :tags tags
               :keywords keywords
@@ -305,6 +323,23 @@ Everything before it (minus the trailing blank separator) is content."
   (interactive)
   (clrhash tiles--cache)
   (message "Tiles cache cleared"))
+
+(defun tiles--private-paragraph-p (paragraph)
+  "Return non-nil if PARAGRAPH starts with &&."
+  (string-prefix-p "&&" (string-trim-left paragraph)))
+
+(defun tiles--strip-private-paragraphs (content)
+  "Remove paragraphs starting with && from CONTENT."
+  (let* ((paras (split-string content "\n\n+" t))
+         (public (seq-remove #'tiles--private-paragraph-p paras)))
+    (mapconcat #'identity public "\n\n")))
+
+(defun tiles--extract-private-paragraphs (content)
+  "Extract paragraphs starting with && from CONTENT, with && prefix removed."
+  (let* ((paras (split-string content "\n\n+" t))
+         (private (seq-filter #'tiles--private-paragraph-p paras)))
+    (mapcar (lambda (p) (string-trim (substring (string-trim-left p) 2)))
+            private)))
 
 (defun tiles--extract-keywords (text)
   "Extract bold keywords from TEXT.
@@ -400,7 +435,7 @@ Checks that the last non-empty line is a tag line preceded by a blank line."
     (tiles-capture-mode 1)
     (insert "\n\n")
     (goto-char (point-min))
-    (message "Write your paragraph, then tags on the last line (separated by /)")))
+    (message "Write your note, prepend with && any meta paragraph (optional), place tag(s) on the last line (separated by /), then hit C-c")))
 
 ;;;###autoload
 (defalias 'tiles-capture #'tiles-new
@@ -595,6 +630,7 @@ QUERY is a space-separated list of keywords (OR logic)."
     (define-key map (kbd "T") #'tiles-notes-touch)
     (define-key map (kbd "+") #'tiles-notes-load-more)
     (define-key map (kbd "0") #'tiles-notes-stitch)
+    (define-key map (kbd "l") #'tiles-new)
     (define-key map (kbd "g") #'tiles-show-notes)
     (define-key map (kbd "q") #'tiles-notes-quit)
     map)
@@ -705,7 +741,8 @@ Otherwise renders with bold/italic faces, stripping footnotes and links."
 
 (defun tiles--note-oneline-preview (note-data)
   "Return a propertized single-line preview of NOTE-DATA's content, max 80 chars."
-  (let* ((content (or (plist-get note-data :content) ""))
+  (let* ((content (tiles--strip-private-paragraphs
+                   (or (plist-get note-data :content) "")))
          (line (string-trim (or (car (split-string content "\n" t)) "")))
          (rendered (tiles--render-org-preview line))
          (truncated (if (> (length rendered) tiles-preview-length)
@@ -869,7 +906,7 @@ Shows a dashboard with statistics and note listing."
                               ""))
                  (title (format "  *T*agged *I*nstant *L*ightweight *E*macs *S*nippet (TILES) | %d notes | loaded in %.3fs%s%s\n"
                                 num-all load-time filter-info page-info))
-                 (keys "  SPC:preview  RET:open  TAB:expand  0:stitch  d:date  D:delete  t:filter tag  k:filter keyword  c:clear  f:toggle  g:refresh  q:quit\n")
+                 (keys "  SPC:preview  RET:open  TAB:expand  0:stitch  d:date  D:delete  t:filter tag  k:filter keyword  c:clear  f:toggle  l:new  g:refresh  q:quit\n")
                  (lunar (when tiles-show-lunar
                           (condition-case nil
                               (let ((info (tiles--next-lunar-event)))
@@ -988,6 +1025,24 @@ Shows a dashboard with statistics and note listing."
                            (concat human "B")))
                      "?"))
          (result ""))
+    ;; Private paragraphs (&&) line
+    (let ((private (tiles--extract-private-paragraphs content)))
+      (when private
+        (let* ((priv-str (mapconcat #'identity private " | "))
+               (max-priv-len (- tiles--line-target-width 20))
+               (priv-str (if (> (length priv-str) max-priv-len)
+                             (concat (substring priv-str 0 (1- max-priv-len)) "…")
+                           priv-str))
+               (priv-line (concat indent priv-str))
+               (padded-priv (if (< (length priv-line) tiles--line-target-width)
+                                (concat priv-line (make-string (- tiles--line-target-width (length priv-line)) ?\s))
+                              priv-line)))
+          (setq result (concat result
+                               (propertize padded-priv
+                                           'face (list 'font-lock-doc-face 'tiles-notes-expanded)
+                                           'tiles-filepath file
+                                           'tiles-expanded t)
+                               "\n")))))
     ;; Keywords line (truncated to align with preview above)
     (let* ((kw-str (if keywords
                        (concat "[" (mapconcat #'identity keywords ", ") "]")
@@ -1170,7 +1225,8 @@ Prompts for a new date in YYYY-MM-DD HH:MM or YYYY-MM-DD HH:MM:SS format."
                         (truncate-string-to-width
                          (string-trim
                           (or (car (split-string
-                                    (plist-get note-data :content) "\n" t))
+                                    (tiles--strip-private-paragraphs
+                                     (plist-get note-data :content)) "\n" t))
                               ""))
                          60)
                       "")))
@@ -1312,7 +1368,8 @@ Prompts for a new date in YYYY-MM-DD HH:MM or YYYY-MM-DD HH:MM:SS format."
           (with-current-buffer preview-buf
             (let ((inhibit-read-only t))
               (erase-buffer)
-              (insert (plist-get note-data :content))
+              (insert (tiles--strip-private-paragraphs
+                       (plist-get note-data :content)))
               (goto-char (point-min)))))))))
 
 (defun tiles-search-next ()
@@ -1409,7 +1466,8 @@ Prompts for a new date in YYYY-MM-DD HH:MM or YYYY-MM-DD HH:MM:SS format."
         (let ((note-data (tiles--parse-note-file file)))
           (when note-data
             (push (cons (point) file) boundaries)
-            (insert (plist-get note-data :content))
+            (insert (tiles--strip-private-paragraphs
+                     (plist-get note-data :content)))
             (insert "\n\n"))))
       (goto-char (point-min)))
     (tiles-stitched-view-mode)
@@ -1509,7 +1567,8 @@ PARAMS supports :tags, :keywords, :sort (\"newest\"/\"oldest\"), :limit."
                (timestamp (tiles--filename-to-timestamp fname))
                (note-data (tiles--parse-note-file file))
                (preview (if note-data
-                            (let* ((content (or (plist-get note-data :content) ""))
+                            (let* ((content (tiles--strip-private-paragraphs
+                                            (or (plist-get note-data :content) "")))
                                    (line (string-trim
                                           (or (car (split-string content "\n" t)) ""))))
                               (if (> (length line) 80)
@@ -1537,7 +1596,8 @@ and :separator (string between notes, default blank line)."
               (if first
                   (setq first nil)
                 (insert separator))
-              (insert (plist-get note-data :content) "\n"))))))))
+              (insert (tiles--strip-private-paragraphs
+                       (plist-get note-data :content)) "\n"))))))))
 
 ;; Register dblocks for C-c C-x x insertion menu
 (with-eval-after-load 'org

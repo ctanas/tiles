@@ -14,6 +14,7 @@ I created this package because I wanted a note taking system with the following 
 - can use the Dynamic Block features in Org Mode (like [Denote](https://protesilaos.com/emacs/denote) and [Denote Org](https://protesilaos.com/emacs/denote-org), ideal if you want to use your notes to create other documents;
 - can stitch notes together, after applying a search filter (like [Howm](https://kaorahi.github.io/howm), ideal if you want to use your notes to create other documents;
 - uses tags for hierarchy but also uses bold keywords (extracted automatically from words that are marked as bold);
+- can have follow-up text inside a note (and *undertile*, if you will), a kind of a meta-note, a private note inside a note, a paragraph prefixed with '&&' hidden everywhere except expanded view in the dashboard and, of course, not editing;
 - search after tags and/or keywords only (who really wants to search for anything else?);
 - no external dependencies needed except at least version 27.1 of Emacs and Org Mode (built-in);
 - uses [Org Mode](https://orgmode.org/org.html) format for bold, italic, links, in-line footnotes;
@@ -38,6 +39,7 @@ space/mars
 ```
 
 - Content: paragraph(s) with full org-mode formatting (`*bold*`, `/italic/`, `[[links]]`, inline footnotes);
+- Optional private paragraphs prefixed with `&&` (see [Private paragraphs](#private-paragraphs) below);
 - Blank line separator after the content;
 - Last non-empty line: tags separated by `/` (always parsed as the tag line); tags are mandatory;
 - Bold words (`*word*`) double as searchable keywords (optional);
@@ -93,7 +95,7 @@ Dashboard keybindings:
 | `n/p`     | Navigate notes                                |
 | `SPC`     | Open editable preview split (follows cursor)  |
 | `RET`     | Open note file                                |
-| `TAB`     | Toggle expanded view (keywords + stats)       |
+| `TAB`     | Toggle expanded view (private &&, keywords, stats) |
 | `M-up`    | Move selected note up                         |
 | `M-down`  | Move selected note down                       |
 | `d`       | Change note date/timestamp (renames file)     |
@@ -104,6 +106,7 @@ Dashboard keybindings:
 | `f`       | Toggle raw preview (strip org formatting)     |
 | `+`       | Load next batch of notes                      |
 | `0`       | Stitch displayed notes into flowing view      |
+| `l`       | New note (same as `C-c m n`)                  |
 | `g`       | Refresh                                       |
 | `q`       | Quit                                          |
 
@@ -145,7 +148,7 @@ Tag and keyword searches (`C-c m t` / `C-c m k`) open a **two-panel view**: resu
 
 ### Stitched view
 
-Press `SPC` from the search view to enter the **stitched view**: all matching notes concatenated into a single flowing org buffer, stripped of tag lines, in inverse chronological order. This is useful for reading related notes as continuous prose or if you want to include multiple related notes into another document, like a newsletter.
+Press `SPC` from the search view to enter the **stitched view**: all matching notes concatenated into a single flowing org buffer, stripped of tag lines and private (`&&`) paragraphs, in inverse chronological order. This is useful for reading related notes as continuous prose or if you want to include multiple related notes into another document, like a newsletter.
 
 | Key     | Action                            |
 |---------|-----------------------------------|
@@ -160,6 +163,24 @@ Press `SPC` from the search view to enter the **stitched view**: all matching no
 `C-c m n` opens a capture buffer. Write your paragraph, add a blank line, then your tags. Press `C-c C-c` to save, `C-c C-k` to cancel. While keywords are not mandatory, tags are, so if the user forgets to add tags, it will be asked to do so.
 
 For faster capture, `C-c m q` prompts for content and tags directly in the minibuffer. `C-c m y` does the same but pre-fills the content from the clipboard (kill ring), which you can edit before confirming.
+
+### Private paragraphs
+
+Any paragraph in a note that starts with `&&` is treated as private. Private paragraphs are hidden from dashboard previews, stitched views, search panels, and dynamic blocks. They are only visible in two places: when expanding a note with `TAB` in the dashboard, and when editing the file directly.
+
+This is useful for keeping personal annotations, reminders, or context that you don't want surfacing in exports or shared views.
+
+```
+The Mars Sample Return (*MSR*) mission involved
+a collaboration between *NASA* and *ESA*.
+
+&& Personal note: double-check the timeline
+with the ESA press release from January.
+
+space/mars
+```
+
+In the example above, the `&&` paragraph will not appear in previews or stitched output, but pressing `TAB` on this note in the dashboard will reveal it in the expanded area.
 
 ### Updating a note's timestamp
 
@@ -247,6 +268,11 @@ Example:
 (set-face-attribute 'tiles-timestamp-today nil :foreground "#008800")
 (set-face-attribute 'tiles-notes-hl-line nil :background "#FFD700")
 ```
+
+## Changelog
+
+- **0.3** — Private paragraphs: paragraphs starting with `&&` are hidden from dashboard previews, stitched views, search panels, and dynamic blocks. Only visible via `TAB` expansion in the dashboard or direct file editing.
+- **0.2** — Initial public release.
 
 ## Acknowledgements
 
