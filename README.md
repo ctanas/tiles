@@ -134,7 +134,9 @@ Dashboard keybindings:
 
 ### Listing all tags and keywords
 
-`M-x tiles-list-tags` displays all unique tags across all notes in a read-only buffer, sorted alphabetically. `M-x tiles-list-keywords` does the same for bold keywords. In both buffers, items that appear in both sets (a tag that's also a keyword, or vice versa) are shown in **bold**, making it easy to spot overlaps.
+`M-x tiles-list-tags` (or `T` in the dashboard) displays all unique tags with occurrence counts, sorted alphabetically. `M-x tiles-list-keywords` (or `K`) does the same for bold keywords. In both buffers, items that appear in both sets are shown in **bold**. Press `RET` to filter the dashboard by the selected item.
+
+Sorting: `a` sorts alphabetically (a-z), `o` sorts by occurrence (high to low), `d` toggles ascending/descending.
 
 ### Tag search syntax
 
@@ -157,7 +159,7 @@ Keyword queries use SPC-separated terms with **OR** logic — any matching term 
 | `emacs`            | Notes with `emacs` as a bold keyword              |
 | `emacs lisp`       | Notes with **either** `emacs` or `lisp`           |
 
-Keywords are the `*bold*` words extracted from note content. This syntax applies to `tiles-keyword-search`, dashboard filter (`k`), and dynamic block `:keywords` parameter.
+Keywords are the `*bold*` words extracted from note content. Hyphens in keywords are normalized to spaces for matching and display — `*Falcon-9*` and `*Falcon 9*` are treated as the same keyword ("Falcon 9") — but the note content itself is never modified. This syntax applies to `tiles-keyword-search`, dashboard filter (`k`), and dynamic block `:keywords` parameter.
 
 ### Search views
 
@@ -209,6 +211,18 @@ space/mars
 In the example above, the `&&` paragraph will not appear in previews or stitched output, but pressing `TAB` on this note in the dashboard will reveal it in the expanded area.
 
 When formatted preview is on (i.e., `tiles-preview-raw` is nil), notes containing private paragraphs display a red `&` indicator right before the preview text in the dashboard, so you can tell at a glance which notes have hidden content.
+
+### Focus mode
+
+Focus mode centers the buffer content with approximately 80-character line width (using window margins, similar to olivetti-mode) and adds visual padding at the top. No hyphens or hard wraps — just soft word wrap via `visual-line-mode`. The padding is purely visual and is never saved to the file.
+
+Focus mode is enabled by default when creating new notes. You can also toggle it manually with `M-x tiles-focus-mode` in any capture buffer.
+
+To disable focus mode by default:
+
+```elisp
+(setq tiles-focus-default nil)
+```
 
 ### Updating a note's timestamp
 
@@ -268,6 +282,7 @@ All settings are available via `M-x customize-group RET tiles`.
 | `tiles-line-padding`   | Extra padding beyond preview and tags    | `22`                 |
 | `tiles-preview-raw`    | Strip all org formatting from previews   | `t`                  |
 | `tiles-dashboard-limit`| Max notes per page (`nil` = unlimited)   | `50`                 |
+| `tiles-focus-default`  | Enable focus mode for new notes          | `t`                  |
 
 Example configuration:
 
@@ -299,7 +314,7 @@ Example:
 
 ## Changelog
 
-- **0.3.2** — Interactive tag/keyword list buffers with navigable selection and RET to filter dashboard. Dashboard keybinding refresh: `T` list tags, `K` list keywords, `u` touch. Stitch confirmation when no filter is active. Renamed to Snippets (plural).
+- **0.3.2** — Focus mode for distraction-free editing (enabled by default, `tiles-focus-default`). Interactive tag/keyword lists with occurrence counts and sorting (`o`/`a`/`d`). Dashboard keybindings: `T` list tags, `K` list keywords, `u` touch. Stitch confirmation when no filter is active.
 - **0.3.1** — Red `&` indicator in formatted preview for notes with private paragraphs. New `tiles-list-tags` and `tiles-list-keywords` commands to browse all unique tags/keywords (with bold cross-highlighting).
 - **0.3** — Private paragraphs: paragraphs starting with `&&` are hidden from dashboard previews, stitched views, search panels, and dynamic blocks. Only visible via `TAB` expansion in the dashboard or direct file editing.
 - **0.2** — Initial public release.

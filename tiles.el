@@ -37,7 +37,9 @@
 ;; - Atomic notes: one paragraph per file, no titles needed
 ;; - Timestamp naming: files named TYYYYMMDDHHMMSS.org
 ;; - Tag-based organization via slash-separated tag lines
-;; - Keyword extraction: bold words (*word*) are searchable
+;; - Keyword extraction: bold words (*word*) are searchable; hyphens
+;;   are normalized to spaces for matching (e.g. *Falcon-9* and
+;;   *Falcon 9* are the same keyword) but note content is unchanged
 ;; - Dashboard (tiles-show-notes): chronological listing with
 ;;   color-coded timestamps, inline org preview, editable split,
 ;;   tag/keyword filtering, and date editing
@@ -49,6 +51,9 @@
 ;; - Touch command to bump a note's timestamp (tiles-touch)
 ;; - Private paragraphs: && prefix hides content from all views
 ;;   except TAB expansion and direct file editing
+;; - Focus mode: distraction-free editing with centered ~80-char
+;;   body, olivetti-style (tiles-focus-mode, L in dashboard)
+;; - Tag/keyword listing with occurrence counts and sorting
 ;; - In-memory cache with mtime invalidation for fast repeated access
 ;; - Org dynamic blocks for embedding note lists/contents in org files
 ;;
@@ -67,9 +72,12 @@
 ;;   TAB       - Toggle expanded view (private &&, keywords, stats)
 ;;   M-up/down - Reorder notes
 ;;   d         - Change note date/timestamp
+;;   u         - Touch (update timestamp to now)
 ;;   D         - Delete note (with confirmation)
 ;;   t         - Filter by tag
 ;;   k         - Filter by keyword
+;;   T         - List all tags
+;;   K         - List all keywords
 ;;   c         - Clear filter
 ;;   f         - Toggle raw preview (strip org formatting)
 ;;   +         - Load next batch of notes
@@ -108,9 +116,13 @@
 ;;
 ;; Other commands (M-x):
 ;;   tiles-touch       - Update a note's timestamp to now (renames file)
+;;   tiles-focus-mode  - Toggle distraction-free editing (~80-char centered)
+;;   tiles-list-tags   - Browse all unique tags with occurrence counts
+;;   tiles-list-keywords - Browse all unique keywords with occurrence counts
 ;;   tiles-clear-cache - Force reload of all note data from disk
 ;;   tiles-show-notes  - Open the dashboard (also C-c m m)
 ;;   tiles-new         - Create a new note (also C-c m n)
+;;   tiles-focus-mode  - Toggle focus mode for distraction-free editing
 ;;   tiles-capture     - Alias for tiles-new
 ;;   tiles-quick       - Quick capture via minibuffer (also C-c m q)
 ;;   tiles-yank        - Quick capture from clipboard (also C-c m y)
@@ -130,11 +142,18 @@
 ;;
 ;; Changelog:
 ;;
-;;   0.3 - Private paragraphs: paragraphs starting with && are hidden
-;;         from dashboard previews, stitched views, search panels, and
-;;         dynamic blocks.  Only visible when expanding a note with TAB
-;;         in the dashboard or editing the file directly.
-;;   0.2 - Initial public release.
+;;   0.3.2 - Focus mode for distraction-free editing (~80-char centered).
+;;           Interactive tag/keyword lists with occurrence counts and
+;;           sorting (alphabetical/occurrence, ascending/descending).
+;;           Dashboard keybindings: T list tags, K list keywords,
+;;           u touch, L new note with focus mode.  Stitch confirmation
+;;           when no filter is active.
+;;   0.3.1 - Red & indicator for notes with private paragraphs.
+;;   0.3   - Private paragraphs: paragraphs starting with && are hidden
+;;           from dashboard previews, stitched views, search panels, and
+;;           dynamic blocks.  Only visible when expanding a note with TAB
+;;           in the dashboard or editing the file directly.
+;;   0.2   - Initial public release.
 
 ;;; Code:
 
@@ -181,6 +200,12 @@ Press `+' to load the next batch.  Set to nil for unlimited."
 The total dashboard line width is `tiles-preview-length' + this value
 + the length of the longest tag string."
   :type 'integer
+  :group 'tiles)
+
+(defcustom tiles-focus-default t
+  "When non-nil, enable focus mode by default when creating new notes.
+Set to nil to disable: (setq tiles-focus-default nil)"
+  :type 'boolean
   :group 'tiles)
 
 ;;; Internal Variables
@@ -341,15 +366,20 @@ Everything before it (minus the trailing blank separator) is content."
     (mapcar (lambda (p) (string-trim (substring (string-trim-left p) 2)))
             private)))
 
+(defun tiles--normalize-keyword (kw)
+  "Normalize keyword KW by replacing hyphens with spaces."
+  (replace-regexp-in-string "-" " " kw))
+
 (defun tiles--extract-keywords (text)
   "Extract bold keywords from TEXT.
-Bold words in org-mode are surrounded by *asterisks*."
+Bold words in org-mode are surrounded by *asterisks*.
+Hyphens are normalized to spaces so \"Falcon-9\" and \"Falcon 9\" are equivalent."
   (let ((keywords nil)
         (pos 0))
     (while (string-match "\\*\\([^*\n]+\\)\\*" text pos)
-      (push (match-string 1 text) keywords)
+      (push (tiles--normalize-keyword (match-string 1 text)) keywords)
       (setq pos (match-end 0)))
-    (nreverse keywords)))
+    (delete-dups (nreverse keywords))))
 
 (defun tiles--parse-tag-query (query)
   "Parse QUERY into AND-groups for tag matching.
@@ -379,12 +409,14 @@ notes with both b218 AND lx2026, OR notes with misc."
               query-and-groups)))
 
 (defun tiles--note-matches-keyword-p (note-data query-keywords)
-  "Check if NOTE-DATA matches any of QUERY-KEYWORDS."
+  "Check if NOTE-DATA matches any of QUERY-KEYWORDS.
+Query keywords are normalized (hyphens replaced with spaces) before matching."
   (let ((note-keywords (plist-get note-data :keywords)))
     (seq-some (lambda (qkw)
-                (seq-some (lambda (nkw)
-                            (string-match-p (regexp-quote qkw) nkw))
-                          note-keywords))
+                (let ((normalized (tiles--normalize-keyword qkw)))
+                  (seq-some (lambda (nkw)
+                              (string-match-p (regexp-quote normalized) nkw))
+                            note-keywords)))
               query-keywords)))
 
 (defun tiles--validate-note-format (content)
@@ -435,6 +467,8 @@ Checks that the last non-empty line is a tag line preceded by a blank line."
     (tiles-capture-mode 1)
     (insert "\n\n")
     (goto-char (point-min))
+    (when tiles-focus-default
+      (tiles-focus-mode 1))
     (message "Write your note, prepend with && any meta paragraph (optional), place tag(s) on the last line (separated by /), then hit C-c")))
 
 ;;;###autoload
@@ -444,6 +478,8 @@ Checks that the last non-empty line is a tag line preceded by a blank line."
 (defun tiles-capture-save ()
   "Save the current TILES capture buffer as a new note."
   (interactive)
+  (when (bound-and-true-p tiles-focus-mode)
+    (tiles-focus-mode -1))
   (let ((content (buffer-string)))
     (let ((valid (tiles--validate-note-format content)))
       (when (not (eq valid t))
@@ -486,6 +522,46 @@ Checks that the last non-empty line is a tag line preceded by a blank line."
     (tiles-capture-mode -1)
     (kill-buffer)
     (message "Note discarded")))
+
+(defvar-local tiles--focus-saved-margins nil
+  "Saved window margins before `tiles-focus-mode' was activated.")
+(defvar-local tiles--focus-overlay nil
+  "Overlay for top padding in `tiles-focus-mode'.")
+
+(define-minor-mode tiles-focus-mode
+  "Minor mode for distraction-free note editing.
+Centers the buffer content with approximately 80-character line width
+and adds 2 empty lines at the top for visual breathing room."
+  :lighter " Focus"
+  (if tiles-focus-mode
+      (let* ((body-width 80)
+             (win (selected-window))
+             (win-width (window-total-width win))
+             (margin (max 0 (/ (- win-width body-width) 2))))
+        (setq tiles--focus-saved-margins (window-margins win))
+        (set-window-margins win margin margin)
+        (set-window-fringes win 0 0)
+        (setq-local word-wrap t)
+        (setq-local truncate-lines nil)
+        (visual-line-mode 1)
+        ;; Add 2 empty lines at top via overlay (not in buffer content)
+        (let ((ov (make-overlay (point-min) (point-min))))
+          (overlay-put ov 'before-string "\n\n")
+          (setq tiles--focus-overlay ov))
+        (goto-char (point-min)))
+    ;; Deactivate: restore margins and remove overlay
+    (when tiles--focus-overlay
+      (delete-overlay tiles--focus-overlay)
+      (setq tiles--focus-overlay nil))
+    (let ((win (selected-window)))
+      (if tiles--focus-saved-margins
+          (set-window-margins win (car tiles--focus-saved-margins)
+                              (cdr tiles--focus-saved-margins))
+        (set-window-margins win 0 0))
+      (set-window-fringes win nil nil))
+    (visual-line-mode -1)
+    (kill-local-variable 'word-wrap)
+    (kill-local-variable 'truncate-lines)))
 
 ;;;###autoload
 (defun tiles-touch ()
@@ -1151,7 +1227,9 @@ Shows a dashboard with statistics and note listing."
   (interactive)
   (let ((filepath (tiles--notes-current-file)))
     (when filepath
-      (find-file filepath))))
+      (find-file filepath)
+      (when tiles-focus-default
+        (tiles-focus-mode 1)))))
 
 (defvar tiles--preview-file nil
   "Filepath currently shown in the preview split.")
