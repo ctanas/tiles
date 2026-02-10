@@ -4,7 +4,7 @@
 ;; distributed under the terms of the GNU General Public License (Version 3, 29 June 2007)
 
 ;; Author: Claudiu Tănăselia
-;; Version: 0.3.2
+;; Version: 0.3.3
 ;; Package-Requires: ((emacs "27.1"))
 ;; Keywords: notes, org
 ;; URL: https://github.com/ctanas/tiles
@@ -163,7 +163,7 @@
 (require 'org)
 (require 'lunar)
 
-(defconst tiles-version "0.3.2"
+(defconst tiles-version "0.3.3"
   "Current version of TILES.")
 
 ;;; Customization

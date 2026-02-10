@@ -308,6 +308,7 @@ All settings are available via `M-x customize-group RET tiles`.
 | `tiles-preview-raw`    | Strip all org formatting from previews   | `t`                  |
 | `tiles-dashboard-limit`| Max notes per page (`nil` = unlimited)   | `50`                 |
 | `tiles-focus-default`  | Enable focus mode for new notes          | `t`                  |
+| `tiles-fancy-separators` | Use Unicode box-drawing separators (═/─) | `t`                |
 
 Example configuration:
 
@@ -339,6 +340,7 @@ Example:
 
 ## Changelog
 
+- **0.3.3** — Unicode box-drawing dashboard separators (`tiles-fancy-separators`, set to `nil` for ASCII fallback). Tag line shown in red (`tiles-tags` face) when editing notes. Focus mode when opening notes from stitched view (`RET`).
 - **0.3.2** — Tag exclusion filter (`F` to exclude, `C` to clear, independent from search filter). Focus mode for distraction-free editing (enabled by default, `tiles-focus-default`). Interactive tag/keyword lists with occurrence counts and sorting (`o`/`a`/`d`). Keyword hyphen normalization. Dashboard keybindings: `T` list tags, `K` list keywords, `u` touch. Stitch confirmation when no filter is active.
 - **0.3.1** — Red `&` indicator in formatted preview for notes with private paragraphs. New `tiles-list-tags` and `tiles-list-keywords` commands to browse all unique tags/keywords (with bold cross-highlighting).
 - **0.3** — Private paragraphs: paragraphs starting with `&&` are hidden from dashboard previews, stitched views, search panels, and dynamic blocks. Only visible via `TAB` expansion in the dashboard or direct file editing.
