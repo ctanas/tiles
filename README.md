@@ -64,6 +64,22 @@ space/mars
 
 ## Installation
 
+### From GitHub (Emacs 29+)
+
+Emacs 29 introduced `package-vc-install`, which can install packages directly from GitHub:
+
+```elisp
+(package-vc-install "https://github.com/ctanas/tiles")
+```
+
+Then add to your config:
+
+```elisp
+(require 'tiles)
+```
+
+### Manual
+
 Clone the repository and add to your load path:
 
 ```elisp
