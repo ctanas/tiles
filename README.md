@@ -42,6 +42,8 @@ An example of a note with meta-content, added after main content, prefixed with 
 The result of stitching all notes sharing the same keyword ("Falcon 9" in this case):
 <img width="1440" height="900" alt="Screenshot 2026-02-09 at 14 25 23" src="https://github.com/user-attachments/assets/4e7c94d7-a6f8-4c23-ad79-298cf0a3717c" />
 
+If you're wondering about the font I'm using inside my Emacs, it's [TX-02 Berkeley Mono 18 Medium Condensed](https://usgraphics.com/products/berkeley-mono).  
+
 ## Note format
 
 Each note is a file named `TYYYYMMDDHHMMSS.org` (T followed by a timestamp up to seconds) and stored in a predefined folder:

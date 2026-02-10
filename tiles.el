@@ -209,6 +209,12 @@ Set to nil to disable: (setq tiles-focus-default nil)"
   :type 'boolean
   :group 'tiles)
 
+(defcustom tiles-fancy-separators t
+  "When non-nil, use Unicode box-drawing characters for dashboard separators.
+Uses ═ and ─ instead of = and -.  Set to nil for plain ASCII."
+  :type 'boolean
+  :group 'tiles)
+
 ;;; Internal Variables
 
 (defvar tiles--current-search-results nil
@@ -440,6 +446,35 @@ Checks that the last non-empty line is a tag line preceded by a blank line."
       "Tags must be preceded by a blank line")
      (t t))))
 
+;;; Tag-line fontification
+
+(defun tiles--tag-line-matcher (limit)
+  "Font-lock matcher for the tag line (last non-empty line) in a tiles note.
+Only matches when preceded by a blank line, per the TILES note format.
+Searches up to LIMIT.  Returns non-nil and sets match data if found."
+  (let ((tag-line-pos nil))
+    (save-excursion
+      (goto-char (point-max))
+      (skip-chars-backward " \t\n")
+      (beginning-of-line)
+      (when (and (<= (point) limit)
+                 (looking-at "^\\(.+\\)$")
+                 (not (looking-at-p "^&&?[ \t]"))
+                 (> (line-number-at-pos) 1)
+                 (save-excursion
+                   (forward-line -1)
+                   (looking-at-p "^[ \t]*$")))
+        (setq tag-line-pos (point))))
+    (when (and tag-line-pos (>= tag-line-pos (point)))
+      (goto-char tag-line-pos)
+      (looking-at "^\\(.+\\)$"))))
+
+(defun tiles--enable-tag-line-fontification ()
+  "Enable red tag-line highlighting in the current buffer."
+  (font-lock-add-keywords nil '((tiles--tag-line-matcher 1 'tiles-tags t)))
+  (when font-lock-mode
+    (font-lock-flush)))
+
 ;;; Capture Mode
 
 (defvar tiles-capture-mode-map
@@ -454,6 +489,7 @@ Checks that the last non-empty line is a tag line preceded by a blank line."
   :lighter " Tiles-Capture"
   :keymap tiles-capture-mode-map
   (when tiles-capture-mode
+    (tiles--enable-tag-line-fontification)
     (message "TILES: C-c C-c to save, C-c C-k to cancel")))
 
 ;;;###autoload
@@ -1198,8 +1234,10 @@ Shows a dashboard with statistics and note listing."
                  (status-parts (seq-filter (lambda (s) (not (string-empty-p s)))
                                            (list lunar-str filter-info exclude-info page-info)))
                  (status-line (format "  %s\n" (mapconcat #'identity status-parts " > ")))
-                 (eq-line (concat "  " (make-string (- tiles--line-target-width 2) ?=) "\n"))
-                 (dash-line (concat "  " (make-string (- tiles--line-target-width 2) ?-) "\n\n")))
+                 (eq-char (if tiles-fancy-separators ?═ ?=))
+                 (dash-char (if tiles-fancy-separators ?─ ?-))
+                 (eq-line (concat "  " (make-string (- tiles--line-target-width 2) eq-char) "\n"))
+                 (dash-line (concat "  " (make-string (- tiles--line-target-width 2) dash-char) "\n\n")))
             (goto-char (point-min))
             (insert (propertize title 'tiles-header t)
                     (propertize eq-line 'face 'font-lock-comment-face 'tiles-header t)
@@ -1270,6 +1308,7 @@ Shows a dashboard with statistics and note listing."
   (let ((filepath (tiles--notes-current-file)))
     (when filepath
       (find-file filepath)
+      (tiles--enable-tag-line-fontification)
       (when tiles-focus-default
         (tiles-focus-mode 1)))))
 
@@ -1693,7 +1732,8 @@ Prompts for a new date in YYYY-MM-DD HH:MM or YYYY-MM-DD HH:MM:SS format."
   (let ((filepath (tiles--current-result-file)))
     (when filepath
       (tiles-quit)
-      (find-file filepath))))
+      (find-file filepath)
+      (tiles--enable-tag-line-fontification))))
 
 (defun tiles-toggle-view ()
   "Toggle between search view and stitched view."
@@ -1819,7 +1859,10 @@ Prompts for a new date in YYYY-MM-DD HH:MM or YYYY-MM-DD HH:MM:SS format."
     (if filepath
         (progn
           (tiles-quit)
-          (find-file filepath))
+          (find-file filepath)
+          (tiles--enable-tag-line-fontification)
+          (when tiles-focus-default
+            (tiles-focus-mode 1)))
       (message "No note at point"))))
 
 (defun tiles-stitched-toggle-view ()
