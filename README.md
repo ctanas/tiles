@@ -115,12 +115,12 @@ All commands are under the `C-c m` prefix:
 `C-c m m` launches the dashboard, which displays a chronological list of all notes. Each entry shows color-coded timestamps (showing hours and minutes to save space), inline previews, tags, and keywords. Timestamps are color-coded: green for today, darker green for recent (< 2 weeks), faded grey for older notes. The selection highlight is Lufthansa yellow. While the dashboard displays truncated timestamps for brevity, the actual filenames include timestamps down to the second level, allowing you to create multiple notes within the same minute without conflicts.
 
 ```
-  *T*agged *I*nstant *L*ightweight *E*macs *S*nippets (TILES), v0.3.2 | 42 notes | loaded in 0.023s
-  ========================================================================
+  *T*agged *I*nstant *L*ightweight *E*macs *S*nippets (TILES), v0.3.3 | 42 notes | loaded in 0.023s
+  ════════════════════════════════════════════════════════════════════════
   [SPC] view, [RET] open, [TAB] expand, [f] format, [d] chg date, [u] touch, [0] stitch, [D] delete, [g] refresh, [+] more, [q] quit
   [t] filter tag, [k] filter keyword, [F] exclude tags, [T] list tags, [K] list keywords, [c] clr search, [C] clr excl, [l] new tile
   7 days until New Moon: Mon, 17 February 2026
-  ----------------------------------------------------------------------
+  ──────────────────────────────────────────────────────────────────────
 
   2026-02-06 08:12  Hello world, I'm the first tile!  meta/test
   2026-02-06 08:12  This note is ready for production  meta/prod
@@ -206,14 +206,14 @@ Press `SPC` from the search view to enter the **stitched view**: all matching no
 | Key     | Action                            |
 |---------|-----------------------------------|
 | `n/p`   | Jump between note boundaries      |
-| `RET/e` | Open the source file at point     |
+| `RET/e` | Open the source file at point (with focus mode) |
 | `SPC`   | Toggle back to two-panel view     |
 | `r`     | Refine search                     |
 | `q`     | Quit                              |
 
 ### Capturing notes
 
-`C-c m n` opens a capture buffer. Write your paragraph, add a blank line, then your tags. Press `C-c C-c` to save, `C-c C-k` to cancel. While keywords are not mandatory, tags are, so if the user forgets to add tags, it will be asked to do so.
+`C-c m n` opens a capture buffer. Write your paragraph, add a blank line, then your tags. Press `C-c C-c` to save, `C-c C-k` to cancel. While keywords are not mandatory, tags are, so if the user forgets to add tags, it will be asked to do so. The tag line (last line) is displayed in red using the `tiles-tags` face, matching the tag color in the dashboard.
 
 For faster capture, `C-c m q` prompts for content and tags directly in the minibuffer. `C-c m y` does the same but pre-fills the content from the clipboard (kill ring), which you can edit before confirming.
 

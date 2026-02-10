@@ -55,6 +55,8 @@
 ;; - Focus mode: distraction-free editing with centered ~80-char
 ;;   body, olivetti-style (tiles-focus-mode, enabled by default)
 ;; - Tag/keyword listing with occurrence counts and sorting
+;; - Tag-line fontification: tag line shown in red when editing notes
+;; - Unicode box-drawing dashboard separators (tiles-fancy-separators)
 ;; - In-memory cache with mtime invalidation for fast repeated access
 ;; - Org dynamic blocks for embedding note lists/contents in org files
 ;;
