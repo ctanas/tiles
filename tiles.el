@@ -42,7 +42,8 @@
 ;;   *Falcon 9* are the same keyword) but note content is unchanged
 ;; - Dashboard (tiles-show-notes): chronological listing with
 ;;   color-coded timestamps, inline org preview, editable split,
-;;   tag/keyword filtering, and date editing
+;;   tag/keyword filtering, tag exclusion, and date editing
+;; - Moon phase in dashboard status line (days until next New/Full Moon)
 ;; - Tag search with AND/OR logic (/ = AND, space = OR)
 ;; - Keyword search with OR logic (space-separated terms)
 ;; - Two-panel search view with live preview
@@ -52,7 +53,7 @@
 ;; - Private paragraphs: && prefix hides content from all views
 ;;   except TAB expansion and direct file editing
 ;; - Focus mode: distraction-free editing with centered ~80-char
-;;   body, olivetti-style (tiles-focus-mode, L in dashboard)
+;;   body, olivetti-style (tiles-focus-mode, enabled by default)
 ;; - Tag/keyword listing with occurrence counts and sorting
 ;; - In-memory cache with mtime invalidation for fast repeated access
 ;; - Org dynamic blocks for embedding note lists/contents in org files
@@ -78,7 +79,9 @@
 ;;   k         - Filter by keyword
 ;;   T         - List all tags
 ;;   K         - List all keywords
-;;   c         - Clear filter
+;;   F         - Exclude tags (hide notes with specified tags)
+;;   c         - Clear search filter (keeps exclusion)
+;;   C         - Clear tag exclusion (keeps search filter)
 ;;   f         - Toggle raw preview (strip org formatting)
 ;;   +         - Load next batch of notes
 ;;   0         - Stitch displayed notes (respects reordering)
@@ -158,7 +161,10 @@
 ;;; Code:
 
 (require 'org)
-(require 'lunar) ;Easter egg
+(require 'lunar)
+
+(defconst tiles-version "0.3.2"
+  "Current version of TILES.")
 
 ;;; Customization
 
@@ -188,11 +194,6 @@ Shows plain text without bold, italic, links, or footnotes markup."
   "Maximum number of notes to display per page in the dashboard.
 Press `+' to load the next batch.  Set to nil for unlimited."
   :type '(choice integer (const nil))
-  :group 'tiles)
-
-(defcustom tiles-show-lunar t
-  "When non-nil, show days until next New Moon or Full Moon in the dashboard header."
-  :type 'boolean
   :group 'tiles)
 
 (defcustom tiles-line-padding 22
@@ -260,7 +261,7 @@ Uses Emacs's built-in lunar phase computation."
                                             (nth 1 date-list)
                                             (nth 0 date-list)
                                             (nth 2 date-list)))
-                   (diff-days (ceiling (/ (float-time (time-subtract phase-time now)) 86400.0))))
+                   (diff-days (floor (/ (float-time (time-subtract phase-time now)) 86400.0))))
               (when (and name (>= diff-days 0)
                          (or (string-match-p "New Moon" name)
                              (string-match-p "Full Moon" name))
@@ -860,12 +861,14 @@ Press RET to filter the dashboard by the selected keyword."
     (define-key map (kbd "t") #'tiles-notes-filter-tag)
     (define-key map (kbd "k") #'tiles-notes-filter-keyword)
     (define-key map (kbd "c") #'tiles-notes-clear-filter)
+    (define-key map (kbd "C") #'tiles-notes-clear-exclude)
     (define-key map (kbd "d") #'tiles-notes-change-date)
     (define-key map (kbd "D") #'tiles-notes-delete)
     (define-key map (kbd "TAB") #'tiles-notes-toggle-expand)
     (define-key map (kbd "<M-up>") #'tiles-notes-move-up)
     (define-key map (kbd "<M-down>") #'tiles-notes-move-down)
     (define-key map (kbd "f") #'tiles-notes-toggle-raw)
+    (define-key map (kbd "F") #'tiles-notes-exclude-tags)
     (define-key map (kbd "T") #'tiles-list-tags)
     (define-key map (kbd "K") #'tiles-list-keywords)
     (define-key map (kbd "u") #'tiles-notes-touch)
@@ -1009,6 +1012,10 @@ Otherwise renders with bold/italic faces, stripping footnotes and links."
   "Current dashboard filter as (TYPE . QUERY) or nil.
 TYPE is `tag' or `keyword'.")
 
+(defvar tiles--notes-exclude nil
+  "List of tags to exclude from dashboard display and search.
+Set by `F' in the dashboard, cleared by `c'.")
+
 (defvar-local tiles--line-target-width 135
   "Computed target width for note lines in the dashboard.
 Equal to `tiles-preview-length' + `tiles-line-padding' + longest tag string length.")
@@ -1035,11 +1042,28 @@ Equal to `tiles-preview-length' + `tiles-line-padding' + longest tag string leng
     (setq tiles--notes-filter (cons 'keyword query))
     (tiles-show-notes)))
 
+(defun tiles-notes-exclude-tags (query)
+  "Exclude notes with any of the specified tags from the dashboard.
+QUERY is a space-separated list of tags to exclude."
+  (interactive "sExclude tags (space-separated): ")
+  (if (string-empty-p (string-trim query))
+      (message "No tags specified")
+    (setq tiles--notes-page 0)
+    (setq tiles--notes-exclude (split-string query " " t))
+    (tiles-show-notes)))
+
 (defun tiles-notes-clear-filter ()
-  "Clear the dashboard filter and show all notes."
+  "Clear the dashboard search filter (keeps exclusions)."
   (interactive)
   (setq tiles--notes-page 0)
   (setq tiles--notes-filter nil)
+  (tiles-show-notes))
+
+(defun tiles-notes-clear-exclude ()
+  "Clear the tag exclusion filter."
+  (interactive)
+  (setq tiles--notes-page 0)
+  (setq tiles--notes-exclude nil)
   (tiles-show-notes))
 
 (defun tiles-notes-touch ()
@@ -1081,22 +1105,36 @@ Equal to `tiles-preview-length' + `tiles-line-padding' + longest tag string leng
   (tiles-show-notes)
   (message "Preview formatting %s" (if tiles-preview-raw "off" "on")))
 
-(defun tiles--apply-filter (files)
-  "Filter FILES according to `tiles--notes-filter'. Return filtered list."
-  (if (not tiles--notes-filter)
+(defun tiles--apply-exclude (files)
+  "Remove from FILES any notes that have excluded tags.
+Uses `tiles--notes-exclude'."
+  (if (not tiles--notes-exclude)
       files
-    (let* ((type (car tiles--notes-filter))
-           (query (cdr tiles--notes-filter))
-           (query-parts (if (eq type 'tag)
-                            (tiles--parse-tag-query query)
-                          (split-string query " " t)))
-           (match-fn (if (eq type 'tag)
-                         #'tiles--note-matches-tag-p
-                       #'tiles--note-matches-keyword-p)))
-      (seq-filter (lambda (file)
-                    (let ((note-data (tiles--parse-note-file file)))
-                      (and note-data (funcall match-fn note-data query-parts))))
-                  files))))
+    (seq-remove (lambda (file)
+                  (let* ((note-data (tiles--parse-note-file file))
+                         (tags (when note-data (plist-get note-data :tags))))
+                    (seq-some (lambda (etag)
+                                (member etag tags))
+                              tiles--notes-exclude)))
+                files)))
+
+(defun tiles--apply-filter (files)
+  "Filter FILES according to `tiles--notes-filter' and `tiles--notes-exclude'."
+  (let ((result (tiles--apply-exclude files)))
+    (if (not tiles--notes-filter)
+        result
+      (let* ((type (car tiles--notes-filter))
+             (query (cdr tiles--notes-filter))
+             (query-parts (if (eq type 'tag)
+                              (tiles--parse-tag-query query)
+                            (split-string query " " t)))
+             (match-fn (if (eq type 'tag)
+                           #'tiles--note-matches-tag-p
+                         #'tiles--note-matches-keyword-p)))
+        (seq-filter (lambda (file)
+                      (let ((note-data (tiles--parse-note-file file)))
+                        (and note-data (funcall match-fn note-data query-parts))))
+                    result)))))
 
 ;;;###autoload
 (defun tiles-show-notes ()
@@ -1136,33 +1174,37 @@ Shows a dashboard with statistics and note listing."
                                 'face 'font-lock-comment-face
                                 'tiles-header t)))
           (let* ((load-time (- (float-time) start-time))
+                 (title (format "  *T*agged *I*nstant *L*ightweight *E*macs *S*nippets (TILES), v%s | %d notes | loaded in %.3fs\n"
+                                tiles-version num-all load-time))
+                 (keys (concat "  [SPC] view, [RET] open, [TAB] expand, [f] format, [d] chg date, [u] touch, [0] stitch, [D] delete, [g] refresh, [+] more, [q] quit\n"
+                               "  [t] filter tag, [k] filter keyword, [F] exclude tags, [T] list tags, [K] list keywords, [c] clr search, [C] clr excl, [l] new tile\n"))
+                 (lunar-str (or (condition-case nil
+                                    (tiles--next-lunar-event)
+                                  (error nil))
+                                ""))
                  (filter-info (if tiles--notes-filter
-                                  (format " | filter %s: %s | %d/%d"
+                                  (format "filter %s: %s (%d/%d)"
                                           (car tiles--notes-filter)
                                           (cdr tiles--notes-filter)
                                           num-filtered num-all)
                                 ""))
+                 (exclude-info (if tiles--notes-exclude
+                                   (format "excluding: %s"
+                                           (mapconcat #'identity tiles--notes-exclude " "))
+                                 ""))
                  (page-info (if tiles-dashboard-limit
-                                (format " | showing %d/%d" (length files) num-filtered)
+                                (format "showing %d/%d" (length files) num-filtered)
                               ""))
-                 (title (format "  *T*agged *I*nstant *L*ightweight *E*macs *S*nippet (TILES) | %d notes | loaded in %.3fs%s%s\n"
-                                num-all load-time filter-info page-info))
-                 (keys (concat "  [SPC] preview, [RET] open, [TAB] expand, [f] format toggle, [d] change date, [u] touch, [D] delete, [+] load more, [q] quit\n"
-                               "  [0] stitch, [g] refresh, [t] filter tag, [k] filter keyword, [T] list tags, [K] list keywords, [c] clear search, [l] new tile\n"))
-                 (lunar (when tiles-show-lunar
-                          (condition-case nil
-                              (let ((info (tiles--next-lunar-event)))
-                                (when info (format "  %s\n" info)))
-                            (error nil))))
+                 (status-parts (seq-filter (lambda (s) (not (string-empty-p s)))
+                                           (list lunar-str filter-info exclude-info page-info)))
+                 (status-line (format "  %s\n" (mapconcat #'identity status-parts " > ")))
                  (eq-line (concat "  " (make-string (- tiles--line-target-width 2) ?=) "\n"))
                  (dash-line (concat "  " (make-string (- tiles--line-target-width 2) ?-) "\n\n")))
             (goto-char (point-min))
             (insert (propertize title 'tiles-header t)
                     (propertize eq-line 'face 'font-lock-comment-face 'tiles-header t)
                     (propertize keys 'face 'font-lock-comment-face 'tiles-header t)
-                    (if lunar
-                        (propertize lunar 'face 'font-lock-comment-face 'tiles-header t)
-                      "")
+                    (propertize status-line 'face 'font-lock-comment-face 'tiles-header t)
                     (propertize dash-line 'face 'font-lock-comment-face 'tiles-header t))))
         (tiles-notes-view-mode)
         ;; Move past header to first note line

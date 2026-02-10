@@ -97,10 +97,11 @@ All commands are under the `C-c m` prefix:
 `C-c m m` launches the dashboard, which displays a chronological list of all notes. Each entry shows color-coded timestamps (showing hours and minutes to save space), inline previews, tags, and keywords. Timestamps are color-coded: green for today, darker green for recent (< 2 weeks), faded grey for older notes. The selection highlight is Lufthansa yellow. While the dashboard displays truncated timestamps for brevity, the actual filenames include timestamps down to the second level, allowing you to create multiple notes within the same minute without conflicts.
 
 ```
-  *T*agged *I*nstant *L*ightweight *E*macs *S*nippets (TILES) | 42 notes | loaded in 0.023s
+  *T*agged *I*nstant *L*ightweight *E*macs *S*nippets (TILES), v0.3.2 | 42 notes | loaded in 0.023s
   ========================================================================
-  [SPC] preview, [RET] open, [TAB] expand, [f] format toggle, [d] change date, [u] touch, [D] delete, [+] load more, [q] quit
-  [0] stitch, [g] refresh, [t] filter tag, [k] filter keyword, [T] list tags, [K] list keywords, [c] clear search, [l] new tile
+  [SPC] view, [RET] open, [TAB] expand, [f] format, [d] chg date, [u] touch, [0] stitch, [D] delete, [g] refresh, [+] more, [q] quit
+  [t] filter tag, [k] filter keyword, [F] exclude tags, [T] list tags, [K] list keywords, [c] clr search, [C] clr excl, [l] new tile
+  7 days until New Moon: Mon, 17 February 2026
   ----------------------------------------------------------------------
 
   2026-02-06 08:12  Hello world, I'm the first tile!  meta/test
@@ -124,7 +125,9 @@ Dashboard keybindings:
 | `k`       | Filter displayed notes by keyword             |
 | `T`       | List all tags                                 |
 | `K`       | List all keywords                             |
-| `c`       | Clear filter                                  |
+| `F`       | Exclude tags (hide notes with these tags)     |
+| `c`       | Clear search filter (keeps exclusion)         |
+| `C`       | Clear tag exclusion (keeps search filter)     |
 | `f`       | Toggle raw preview (strip org formatting)     |
 | `+`       | Load next batch of notes                      |
 | `0`       | Stitch displayed notes into flowing view      |
@@ -137,6 +140,10 @@ Dashboard keybindings:
 `M-x tiles-list-tags` (or `T` in the dashboard) displays all unique tags with occurrence counts, sorted alphabetically. `M-x tiles-list-keywords` (or `K`) does the same for bold keywords. In both buffers, items that appear in both sets are shown in **bold**. Press `RET` to filter the dashboard by the selected item.
 
 Sorting: `a` sorts alphabetically (a-z), `o` sorts by occurrence (high to low), `d` toggles ascending/descending.
+
+### Tag exclusion
+
+Press `F` in the dashboard to exclude notes by tag. Enter one or more space-separated tags and any note carrying those tags will be hidden. The exclusion filter works independently from the search filter (`t`/`k`): you can exclude some tags, then search within the remaining notes. `c` clears only the search filter (keeping the exclusion), while `C` clears only the exclusion (keeping the search filter). The dashboard title shows the active exclusion (e.g., `| excluding: journal draft`).
 
 ### Tag search syntax
 
@@ -314,7 +321,7 @@ Example:
 
 ## Changelog
 
-- **0.3.2** — Focus mode for distraction-free editing (enabled by default, `tiles-focus-default`). Interactive tag/keyword lists with occurrence counts and sorting (`o`/`a`/`d`). Dashboard keybindings: `T` list tags, `K` list keywords, `u` touch. Stitch confirmation when no filter is active.
+- **0.3.2** — Tag exclusion filter (`F` to exclude, `C` to clear, independent from search filter). Focus mode for distraction-free editing (enabled by default, `tiles-focus-default`). Interactive tag/keyword lists with occurrence counts and sorting (`o`/`a`/`d`). Keyword hyphen normalization. Dashboard keybindings: `T` list tags, `K` list keywords, `u` touch. Stitch confirmation when no filter is active.
 - **0.3.1** — Red `&` indicator in formatted preview for notes with private paragraphs. New `tiles-list-tags` and `tiles-list-keywords` commands to browse all unique tags/keywords (with bold cross-highlighting).
 - **0.3** — Private paragraphs: paragraphs starting with `&&` are hidden from dashboard previews, stitched views, search panels, and dynamic blocks. Only visible via `TAB` expansion in the dashboard or direct file editing.
 - **0.2** — Initial public release.
