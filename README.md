@@ -115,7 +115,7 @@ All commands are under the `C-c m` prefix:
 `C-c m m` launches the dashboard, which displays a chronological list of all notes. Each entry shows color-coded timestamps (showing hours and minutes to save space), inline previews, tags, and keywords. Timestamps are color-coded: green for today, darker green for recent (< 2 weeks), faded grey for older notes. The selection highlight is Lufthansa yellow. While the dashboard displays truncated timestamps for brevity, the actual filenames include timestamps down to the second level, allowing you to create multiple notes within the same minute without conflicts.
 
 ```
-  *T*agged *I*nstant *L*ightweight *E*macs *S*nippets (TILES), v0.3.3 | 42 notes | loaded in 0.023s
+  *T*agged *I*nstant *L*ightweight *E*macs *S*nippets (TILES), v0.3.4 | 42 notes | loaded in 0.023s
   ════════════════════════════════════════════════════════════════════════
   [SPC] view, [RET] open, [TAB] expand, [f] format, [d] chg date, [u] touch, [0] stitch, [D] delete, [g] refresh, [+] more, [q] quit
   [t] filter tag, [k] filter keyword, [F] exclude tags, [T] list tags, [K] list keywords, [c] clr search, [C] clr excl, [l] new tile
@@ -158,6 +158,8 @@ Dashboard keybindings:
 `M-x tiles-list-tags` (or `T` in the dashboard) displays all unique tags with occurrence counts, sorted alphabetically. `M-x tiles-list-keywords` (or `K`) does the same for bold keywords. In both buffers, items that appear in both sets are shown in **bold**. Press `RET` to filter the dashboard by the selected item.
 
 Sorting: `a` sorts alphabetically (a-z), `o` sorts by occurrence (high to low), `d` toggles ascending/descending.
+
+In the keyword list, press `R` to rename a keyword across all notes. You'll be prompted for a new name, and every bold occurrence (`*old*`) will be replaced in all note files that contain it.
 
 ### Tag exclusion
 
@@ -340,6 +342,7 @@ Example:
 
 ## Changelog
 
+- **0.3.4** — Keyword rename: `R` in the keyword list renames a keyword across all note files.
 - **0.3.3** — Unicode box-drawing dashboard separators (`tiles-fancy-separators`, set to `nil` for ASCII fallback). Tag line shown in red (`tiles-tags` face) when editing notes. Focus mode when opening notes from stitched view (`RET`).
 - **0.3.2** — Tag exclusion filter (`F` to exclude, `C` to clear, independent from search filter). Focus mode for distraction-free editing (enabled by default, `tiles-focus-default`). Interactive tag/keyword lists with occurrence counts and sorting (`o`/`a`/`d`). Keyword hyphen normalization. Dashboard keybindings: `T` list tags, `K` list keywords, `u` touch. Stitch confirmation when no filter is active.
 - **0.3.1** — Red `&` indicator in formatted preview for notes with private paragraphs. New `tiles-list-tags` and `tiles-list-keywords` commands to browse all unique tags/keywords (with bold cross-highlighting).

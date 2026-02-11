@@ -4,7 +4,7 @@
 ;; distributed under the terms of the GNU General Public License (Version 3, 29 June 2007)
 
 ;; Author: Claudiu Tănăselia
-;; Version: 0.3.3
+;; Version: 0.3.4
 ;; Package-Requires: ((emacs "27.1"))
 ;; Keywords: notes, org
 ;; URL: https://github.com/ctanas/tiles
@@ -54,7 +54,7 @@
 ;;   except TAB expansion and direct file editing
 ;; - Focus mode: distraction-free editing with centered ~80-char
 ;;   body, olivetti-style (tiles-focus-mode, enabled by default)
-;; - Tag/keyword listing with occurrence counts and sorting
+;; - Tag/keyword listing with occurrence counts, sorting, and keyword rename
 ;; - Tag-line fontification: tag line shown in red when editing notes
 ;; - Unicode box-drawing dashboard separators (tiles-fancy-separators)
 ;; - In-memory cache with mtime invalidation for fast repeated access
@@ -124,6 +124,7 @@
 ;;   tiles-focus-mode  - Toggle distraction-free editing (~80-char centered)
 ;;   tiles-list-tags   - Browse all unique tags with occurrence counts
 ;;   tiles-list-keywords - Browse all unique keywords with occurrence counts
+;;   tiles-list-rename - Rename keyword under cursor across all notes (R in keyword list)
 ;;   tiles-clear-cache - Force reload of all note data from disk
 ;;   tiles-show-notes  - Open the dashboard (also C-c m m)
 ;;   tiles-new         - Create a new note (also C-c m n)
@@ -147,6 +148,9 @@
 ;;
 ;; Changelog:
 ;;
+;;   0.3.4 - Keyword rename: R in keyword list renames a keyword across all notes.
+;;   0.3.3 - Unicode box-drawing dashboard separators, tag-line fontification,
+;;           focus mode from stitched view.
 ;;   0.3.2 - Focus mode for distraction-free editing (~80-char centered).
 ;;           Interactive tag/keyword lists with occurrence counts and
 ;;           sorting (alphabetical/occurrence, ascending/descending).
@@ -165,7 +169,7 @@
 (require 'org)
 (require 'lunar)
 
-(defconst tiles-version "0.3.3"
+(defconst tiles-version "0.3.4"
   "Current version of TILES.")
 
 ;;; Customization
@@ -728,6 +732,7 @@ QUERY is a space-separated list of keywords (OR logic)."
     (define-key map (kbd "o") #'tiles-list-sort-occurrence)
     (define-key map (kbd "a") #'tiles-list-sort-alpha)
     (define-key map (kbd "d") #'tiles-list-toggle-direction)
+    (define-key map (kbd "R") #'tiles-list-rename)
     (define-key map (kbd "q") #'quit-window)
     map)
   "Keymap for `tiles-list-mode'.")
@@ -770,8 +775,9 @@ QUERY is a space-separated list of keywords (OR logic)."
                              (if desc "descending" "ascending")))
          (inhibit-read-only t))
     (erase-buffer)
-    (insert (propertize (format "%d unique %s  [%s]  (RET:search  o:sort occurrence  a:sort alpha  d:toggle direction  q:quit)\n\n"
-                                (length keys) type-label sort-label)
+    (insert (propertize (format "%d unique %s  [%s]  (RET:search  %so:sort occurrence  a:sort alpha  d:toggle direction  q:quit)\n\n"
+                                (length keys) type-label sort-label
+                                (if (eq type 'keyword) "R:rename  " ""))
                         'face 'font-lock-comment-face
                         'tiles-header t))
     (dolist (item sorted)
@@ -832,6 +838,54 @@ QUERY is a space-separated list of keywords (OR logic)."
   (interactive)
   (setq tiles--list-descending (not tiles--list-descending))
   (tiles--list-render))
+
+(defun tiles-list-rename ()
+  "Rename the keyword on the current line across all note files.
+Prompts for a new name, then replaces every bold occurrence in all notes.
+Only works in keyword lists, not tag lists."
+  (interactive)
+  (unless (eq tiles--list-type 'keyword)
+    (user-error "Rename is only supported for keywords"))
+  (let* ((raw (string-trim (buffer-substring-no-properties
+                            (line-beginning-position) (line-end-position))))
+         (item (if (string-match "^\\[[0-9]+\\] \\(.*\\)" raw)
+                   (match-string 1 raw)
+                 raw)))
+    (when (or (not item) (string-empty-p item))
+      (user-error "No keyword on this line"))
+    (let ((new-name (string-trim
+                     (read-string (format "Rename \"%s\" to: " item) item))))
+      (when (string-empty-p new-name)
+        (user-error "New keyword name cannot be empty"))
+      (when (string= (tiles--normalize-keyword new-name)
+                     (tiles--normalize-keyword item))
+        (user-error "New name is the same as the old name"))
+      (let ((count 0))
+        (dolist (file (tiles--get-all-tile-files))
+          (let* ((note-data (tiles--parse-note-file file))
+                 (keywords (plist-get note-data :keywords)))
+            (when (member item keywords)
+              (with-temp-buffer
+                (insert-file-contents file)
+                (let ((modified nil))
+                  ;; Replace bold occurrences whose normalized form matches
+                  (goto-char (point-min))
+                  (while (re-search-forward "\\*\\([^*\n]+\\)\\*" nil t)
+                    (when (string= (tiles--normalize-keyword (match-string 1))
+                                   item)
+                      (replace-match (format "*%s*" new-name) t t)
+                      (setq modified t)))
+                  (when modified
+                    (write-region (point-min) (point-max) file nil 'silent)
+                    (remhash file tiles--cache)
+                    (setq count (1+ count))))))))
+        (message "Renamed \"%s\" to \"%s\" in %d file%s"
+                 item new-name count (if (= count 1) "" "s"))
+        ;; Re-collect data and re-render
+        (let ((data (tiles--list-collect-data)))
+          (setq-local tiles--list-items (cdr data))
+          (setq-local tiles--list-cross (car data))
+          (tiles--list-render))))))
 
 (defun tiles--list-collect-data ()
   "Collect tag and keyword counts from all notes.
@@ -1942,8 +1996,14 @@ and :separator (string between notes, default blank line)."
               (if first
                   (setq first nil)
                 (insert separator))
-              (insert (tiles--strip-private-paragraphs
-                       (plist-get note-data :content)) "\n"))))))))
+              (let ((anchor (file-name-sans-extension
+                             (file-name-nondirectory file)))
+                    (tags (plist-get note-data :tags)))
+                (unless (member "crewo" tags)
+                  (insert (format "@@html:<a id=\"%s\" href=\"#%s\" class=\"paragraph-link\">&rarr;</a>@@\n" anchor anchor)))
+                (insert (tiles--strip-private-paragraphs
+                         (plist-get note-data :content)))
+                (insert "\n")))))))))
 
 ;; Register dblocks for C-c C-x x insertion menu
 (with-eval-after-load 'org
