@@ -273,7 +273,9 @@ Uses Emacs's built-in lunar phase computation."
                                             (nth 1 date-list)
                                             (nth 0 date-list)
                                             (nth 2 date-list)))
-                   (diff-days (floor (/ (float-time (time-subtract phase-time now)) 86400.0))))
+                   (today-days (time-to-days now))
+                   (phase-days (time-to-days phase-time))
+                   (diff-days (- phase-days today-days)))
               (when (and name (>= diff-days 0)
                          (or (string-match-p "New Moon" name)
                              (string-match-p "Full Moon" name))
@@ -287,7 +289,7 @@ Uses Emacs's built-in lunar phase computation."
          ((= best-days 0)
           (format "%s MOON TODAY!" short))
          ((= best-days 1)
-          (format "%s Moon Tomorrow!" best-name))
+          (format "%s MOON TOMORROW!" short))
          (t
           (format "%d days until %s: %s" best-days best-name best-date)))))))
 
@@ -589,10 +591,13 @@ and adds 2 empty lines at the top for visual breathing room."
         (visual-line-mode 1)
         ;; Add 2 empty lines at top via overlay (not in buffer content)
         (let ((ov (make-overlay (point-min) (point-min))))
-          (overlay-put ov 'before-string "\n\n")
+          (overlay-put ov 'before-string
+                       (propertize "\n\n" 'cursor-intangible t))
           (setq tiles--focus-overlay ov))
+        (cursor-intangible-mode 1)
         (goto-char (point-min)))
     ;; Deactivate: restore margins and remove overlay
+    (cursor-intangible-mode -1)
     (when tiles--focus-overlay
       (delete-overlay tiles--focus-overlay)
       (setq tiles--focus-overlay nil))
