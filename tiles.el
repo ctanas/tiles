@@ -573,6 +573,18 @@ Searches up to LIMIT.  Returns non-nil and sets match data if found."
 (defvar-local tiles--focus-overlay nil
   "Overlay for top padding in `tiles-focus-mode'.")
 
+(defun tiles--focus-reapply ()
+  "Re-apply focus mode margins to all windows currently displaying this buffer.
+Used as a buffer-local `window-configuration-change-hook' to restore margins
+after switching away and back to a focus-mode buffer."
+  (when (bound-and-true-p tiles-focus-mode)
+    (dolist (win (get-buffer-window-list (current-buffer) nil t))
+      (let* ((body-width 80)
+             (win-width (window-total-width win))
+             (margin (max 0 (/ (- win-width body-width) 2))))
+        (set-window-margins win margin margin)
+        (set-window-fringes win 0 0)))))
+
 (define-minor-mode tiles-focus-mode
   "Minor mode for distraction-free note editing.
 Centers the buffer content with approximately 80-character line width
@@ -595,8 +607,11 @@ and adds 2 empty lines at the top for visual breathing room."
                        (propertize "\n\n" 'cursor-intangible t))
           (setq tiles--focus-overlay ov))
         (cursor-intangible-mode 1)
-        (goto-char (point-min)))
+        (goto-char (point-min))
+        ;; Re-apply margins whenever this buffer appears in a new window
+        (add-hook 'window-configuration-change-hook #'tiles--focus-reapply nil t))
     ;; Deactivate: restore margins and remove overlay
+    (remove-hook 'window-configuration-change-hook #'tiles--focus-reapply t)
     (cursor-intangible-mode -1)
     (when tiles--focus-overlay
       (delete-overlay tiles--focus-overlay)
@@ -1192,8 +1207,14 @@ QUERY is a space-separated list of tags to exclude."
   (interactive)
   (if (not tiles-dashboard-limit)
       (message "All notes already shown")
-    (setq tiles--notes-page (1+ tiles--notes-page))
-    (tiles-show-notes)))
+    (let ((current-file (tiles--notes-current-file)))
+      (setq tiles--notes-page (1+ tiles--notes-page))
+      (tiles-show-notes)
+      (when current-file
+        (goto-char (point-min))
+        (while (and (not (eobp))
+                    (not (equal (get-text-property (point) 'tiles-filepath) current-file)))
+          (forward-line 1))))))
 
 (defun tiles-notes-toggle-raw ()
   "Toggle raw (plain text) preview in the dashboard."
