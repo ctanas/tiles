@@ -217,6 +217,14 @@ Press `SPC` from the search view to enter the **stitched view**: all matching no
 
 `C-c m n` opens a capture buffer. Write your paragraph, add a blank line, then your tags. Press `C-c C-c` to save, `C-c C-k` to cancel. While keywords are not mandatory, tags are, so if the user forgets to add tags, it will be asked to do so. The tag line (last line) is displayed in red using the `tiles-tags` face, matching the tag color in the dashboard.
 
+Inside the capture buffer, `C-c m t` (`tiles-insert-tag`) inserts a tag at point using minibuffer completion:
+- **Unrestricted mode**: suggests all tags found in existing notes (free input allowed).
+- **Restricted mode**: completes from the allowed list with `require-match` enforced.
+- **Required-one-of mode**: suggests the required tags (free input still allowed).
+- **Inhibit mode**: displays a message explaining that tags are disabled and how to re-enable them.
+
+Outside a capture buffer, `C-c m t` continues to run `tiles-tag-search` as usual.
+
 For faster capture, `C-c m q` prompts for content and tags directly in the minibuffer. `C-c m y` does the same but pre-fills the content from the clipboard (kill ring), which you can edit before confirming.
 
 ### Private paragraphs
@@ -315,13 +323,17 @@ All settings are available via `M-x customize-group RET tiles`.
 
 ### Tag mode
 
-`tiles-tag-mode` controls how tags work across the entire package. It accepts three kinds of values:
+`tiles-tag-mode` controls how tags work across the entire package. It accepts four kinds of values:
 
 **`'unrestricted`** (default) — tags work as described throughout this document: any string is accepted, search and filter are fully available.
 
 **`'inhibit`** — tags are completely disabled. Capture (both buffer and quick) does not prompt for tags; notes are saved with an internal placeholder. Tag-based search (`C-c m t`), dashboard tag filter (`t`), tag exclusion (`F`), and tag listing (`T`) are all disabled and will show an error if invoked. Tags are not displayed in the dashboard, and the second keybinding help line is simplified to omit tag-related keys.
 
 **A list of strings** — only those tags are accepted. Tag prompts use `completing-read` with the list as candidates and `require-match` enforced, so any completion framework (Vertico, Ivy, Helm, etc.) will show the candidates automatically. The first element of the list is used as the default when the user provides no input. Tags entered manually in the capture buffer are validated against the list at save time, and the save is rejected if any tag is not in the list. Dashboard tag filter (`t`), exclusion (`F`), and search (`C-c m t`) also use completion-based prompts restricted to the allowed list.
+
+**`(required-one-of TAG...)`** — any tag is accepted, but at least one from the list must be present. Prompts suggest the required tags via `completing-read` with free input still allowed, so completion frameworks will surface the candidates without enforcing them. If the saved note contains no tag from the required list, the save is rejected with a clear error message. Dashboard filter, exclusion, and search prompts also suggest the required tags but accept free input.
+
+---
 
 **Case 1 — Unrestricted (default).** No configuration needed; this is the default. To restore it explicitly:
 
@@ -344,6 +356,14 @@ With this setting: capture never asks for tags, the dashboard hides tag columns 
 ```
 
 With this setting: `C-c m n` and `C-c m q`/`C-c m y` prompt for a tag using completion restricted to the list (`work` is offered as the default); `t`, `F`, and `C-c m t` in the dashboard also use completion. Any tag typed manually in the capture buffer that is not in the list will be rejected at save time with a clear error message.
+
+**Case 4 — At least one required tag.** Allow any tags, but enforce that at least one comes from a required set:
+
+```elisp
+(setq tiles-tag-mode '(required-one-of "work" "personal" "journal"))
+```
+
+With this setting: `C-c m n` and `C-c m q`/`C-c m y` prompt for tags with the required tags suggested via completion (free input still allowed); `t`, `F`, and `C-c m t` in the dashboard also suggest the required tags but accept any string. If the saved note contains none of the required tags, the save is rejected with a clear error message.
 
 Example configuration:
 
@@ -375,7 +395,7 @@ Example:
 
 ## Changelog
 
-- **0.3.5** — Tag mode control via `tiles-tag-mode`: `'unrestricted` (default), `'inhibit` (tags disabled, tag search/filter suppressed), or a list of allowed tag strings (completion-based prompts, first element is the default). Fix: deleting the last note now correctly refreshes the dashboard to an empty state instead of leaving the deleted note visible.
+- **0.3.5** — Tag mode control via `tiles-tag-mode`: `'unrestricted` (default), `'inhibit` (tags disabled, tag search/filter suppressed), a list of allowed tag strings (completion-based prompts, first element is the default), or `(required-one-of TAG...)` (any tags accepted, but at least one from the list must be present). Fix: deleting the last note now correctly refreshes the dashboard to an empty state instead of leaving the deleted note visible.
 - **0.3.4** — Keyword rename: `R` in the keyword list renames a keyword across all note files.
 - **0.3.3** — Unicode box-drawing dashboard separators (`tiles-fancy-separators`, set to `nil` for ASCII fallback). Tag line shown in red (`tiles-tags` face) when editing notes. Focus mode when opening notes from stitched view (`RET`).
 - **0.3.2** — Tag exclusion filter (`F` to exclude, `C` to clear, independent from search filter). Focus mode for distraction-free editing (enabled by default, `tiles-focus-default`). Interactive tag/keyword lists with occurrence counts and sorting (`o`/`a`/`d`). Keyword hyphen normalization. Dashboard keybindings: `T` list tags, `K` list keywords, `u` touch. Stitch confirmation when no filter is active.

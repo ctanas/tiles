@@ -65,7 +65,7 @@
 ;;   C-c m n   - New note (tiles-new)
 ;;   C-c m q   - Quick capture via minibuffer (tiles-quick)
 ;;   C-c m y   - Quick capture from clipboard (tiles-yank)
-;;   C-c m t   - Tag search (tiles-tag-search)
+;;   C-c m t   - Tag search (tiles-tag-search); insert tag at point in capture buffers
 ;;   C-c m k   - Keyword search (tiles-keyword-search)
 ;;
 ;; Dashboard keybindings:
@@ -149,8 +149,10 @@
 ;; Changelog:
 ;;
 ;;   0.3.5 - Tag mode control: tiles-tag-mode can be `unrestricted' (default),
-;;           `inhibit' (no tags, tag search/filter disabled), or a list of
-;;           allowed tag strings (completion-based input, first element is default).
+;;           `inhibit' (no tags, tag search/filter disabled), a list of allowed
+;;           tag strings (completion-based, first element is default), or
+;;           (required-one-of TAG...) where any tags are accepted but at least
+;;           one from the list must be present.
 ;;           Fix: deleting the last note now refreshes the dashboard to an empty
 ;;           state instead of leaving the deleted note visible.
 ;;   0.3.4 - Keyword rename: R in keyword list renames a keyword across all notes.
@@ -236,10 +238,15 @@ Possible values:
   filtering in the dashboard are disabled.
 - A list of strings: only those tags are accepted.  Prompts use completion
   restricted to the list.  The first element is applied as the default when
-  the user provides no input."
+  the user provides no input.
+- (required-one-of TAG...): any tags are accepted, but at least one from
+  the list must be present.  Prompts suggest the required tags via
+  completion (free input is still allowed).  Example:
+  (required-one-of \"work\" \"personal\" \"journal\")"
   :type '(choice (const :tag "Unrestricted (default)" unrestricted)
                  (const :tag "Inhibit tags" inhibit)
-                 (repeat :tag "Allowed tags list" string))
+                 (repeat :tag "Allowed tags list (only these accepted)" string)
+                 (sexp :tag "At least one required (free input otherwise): (required-one-of \"tag1\" ...)"))
   :group 'tiles)
 
 ;;; Internal Variables
@@ -527,8 +534,19 @@ Searches up to LIMIT.  Returns non-nil and sets match data if found."
   (eq tiles-tag-mode 'inhibit))
 
 (defun tiles--tags-restricted-p ()
-  "Return non-nil when tags are restricted to the `tiles-tag-mode' list."
-  (listp tiles-tag-mode))
+  "Return non-nil when tags are restricted to the `tiles-tag-mode' list.
+True only for the plain list-of-strings form, not `required-one-of'."
+  (and (listp tiles-tag-mode)
+       (or (null tiles-tag-mode) (stringp (car tiles-tag-mode)))))
+
+(defun tiles--tags-required-one-of-p ()
+  "Return non-nil when `tiles-tag-mode' is the (required-one-of ...) form."
+  (and (consp tiles-tag-mode) (eq (car tiles-tag-mode) 'required-one-of)))
+
+(defun tiles--tags-required-list ()
+  "Return the list of tags at least one of which must be present.
+Only meaningful when `tiles--tags-required-one-of-p' is non-nil."
+  (cdr tiles-tag-mode))
 
 (defun tiles--prompt-for-tags (&optional prompt)
   "Prompt for tags according to `tiles-tag-mode'.
@@ -542,14 +560,46 @@ PROMPT overrides the default prompt string."
            (pr (or prompt (format "Tag (default: %s): " default)))
            (input (completing-read pr allowed nil t nil nil default)))
       (if (string-empty-p (string-trim input)) default input)))
+   ((tiles--tags-required-one-of-p)
+    (let* ((required (tiles--tags-required-list))
+           (pr (or prompt (format "Tags (at least one of: %s): "
+                                  (mapconcat #'identity required ", ")))))
+      (read-string pr)))
    (t (read-string (or prompt "Tags (separated by /): ")))))
 
 ;;; Capture Mode
+
+(defun tiles-insert-tag ()
+  "Insert a tag at point using minibuffer completion.
+In `inhibit' mode, displays a message instead.
+In restricted mode, completes from the allowed list with `require-match'.
+In `required-one-of' mode, suggests the required tags (free input allowed).
+In unrestricted mode, suggests all tags found in existing notes (free input)."
+  (interactive)
+  (if (tiles--tags-inhibited-p)
+      (message "Tags are inhibited (tiles-tag-mode is 'inhibit).  \
+Set tiles-tag-mode to 'unrestricted or a tag list to enable them.")
+    (let* ((candidates
+            (cond
+             ((tiles--tags-restricted-p) tiles-tag-mode)
+             ((tiles--tags-required-one-of-p) (tiles--tags-required-list))
+             (t (hash-table-keys (car (tiles--list-collect-data))))))
+           (require-match (and (tiles--tags-restricted-p) t))
+           (prompt
+            (cond
+             ((tiles--tags-required-one-of-p)
+              (format "Tag (required: %s): "
+                      (mapconcat #'identity (tiles--tags-required-list) ", ")))
+             (t "Tag: ")))
+           (tag (completing-read prompt candidates nil require-match)))
+      (when (not (string-empty-p (string-trim tag)))
+        (insert tag)))))
 
 (defvar tiles-capture-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "C-c C-c") #'tiles-capture-save)
     (define-key map (kbd "C-c C-k") #'tiles-capture-cancel)
+    (define-key map (kbd "C-c m t") #'tiles-insert-tag)
     map)
   "Keymap for `tiles-capture-mode'.")
 
@@ -559,7 +609,7 @@ PROMPT overrides the default prompt string."
   :keymap tiles-capture-mode-map
   (when tiles-capture-mode
     (tiles--enable-tag-line-fontification)
-    (message "TILES: C-c C-c to save, C-c C-k to cancel")))
+    (message "TILES: C-c C-c to save, C-c C-k to cancel, C-c m t to insert tag")))
 
 ;;;###autoload
 (defun tiles-new ()
@@ -586,8 +636,6 @@ PROMPT overrides the default prompt string."
 (defun tiles-capture-save ()
   "Save the current TILES capture buffer as a new note."
   (interactive)
-  (when (bound-and-true-p tiles-focus-mode)
-    (tiles-focus-mode -1))
   (let ((content (buffer-string)))
     ;; Step 1: resolve tags per tiles-tag-mode
     (cond
@@ -604,9 +652,7 @@ PROMPT overrides the default prompt string."
       ;; Prompt for tags if missing
       (let ((valid (tiles--validate-note-format content)))
         (when (not (eq valid t))
-          (let ((tags (if (tiles--tags-restricted-p)
-                          (tiles--prompt-for-tags (format "%s. Add tag: " valid))
-                        (read-string (format "%s. Add tags (separated by /): " valid)))))
+          (let ((tags (tiles--prompt-for-tags (format "%s. Add tags: " valid))))
             (when (or (null tags) (string-empty-p (string-trim tags)))
               (user-error "Aborted: note needs tags"))
             (goto-char (point-max))
@@ -619,21 +665,30 @@ PROMPT overrides the default prompt string."
     (let ((valid (tiles--validate-note-format content)))
       (unless (eq valid t)
         (user-error "%s" valid))
-      ;; Step 3: in restricted mode, verify every tag is in the allowed list
-      (when (tiles--tags-restricted-p)
+      ;; Step 3: validate tags per mode
+      (when (or (tiles--tags-restricted-p) (tiles--tags-required-one-of-p))
         (let* ((lines (split-string content "\n"))
                (i (1- (length lines))))
           (while (and (>= i 0) (string-empty-p (string-trim (nth i lines))))
             (setq i (1- i)))
           (when (>= i 0)
             (let* ((tag-line (string-trim (nth i lines)))
-                   (tags (split-string tag-line "/" t "[ \t]+"))
-                   (invalid (seq-remove (lambda (tag) (member tag tiles-tag-mode)) tags)))
-              (when invalid
-                (user-error "Tag(s) not in allowed list: %s.  Allowed: %s"
-                            (mapconcat #'identity invalid ", ")
-                            (mapconcat #'identity tiles-tag-mode ", ")))))))
+                   (tags (split-string tag-line "/" t "[ \t]+")))
+              (cond
+               ((tiles--tags-restricted-p)
+                (let ((invalid (seq-remove (lambda (tag) (member tag tiles-tag-mode)) tags)))
+                  (when invalid
+                    (user-error "Tag(s) not in allowed list: %s.  Allowed: %s"
+                                (mapconcat #'identity invalid ", ")
+                                (mapconcat #'identity tiles-tag-mode ", ")))))
+               ((tiles--tags-required-one-of-p)
+                (let ((required (tiles--tags-required-list)))
+                  (unless (seq-some (lambda (tag) (member tag required)) tags)
+                    (user-error "At least one of these tags is required: %s"
+                                (mapconcat #'identity required ", "))))))))))
       ;; Step 4: save
+      (when (bound-and-true-p tiles-focus-mode)
+        (tiles-focus-mode -1))
       (tiles--ensure-directory)
       (let* ((filename (tiles--generate-filename))
              (filepath (expand-file-name filename tiles-directory)))
@@ -800,11 +855,17 @@ QUERY uses / for AND and space for OR.
 \"b218/lx2026\" matches notes with both tags.
 \"b218 misc\" matches notes with either tag.
 \"b218/lx2026 misc\" matches (b218 AND lx2026) OR misc."
-  (interactive (list (if (tiles--tags-inhibited-p)
-                         (user-error "Tag search is disabled (tiles-tag-mode is inhibit)")
-                       (if (tiles--tags-restricted-p)
-                           (completing-read "Search tag: " tiles-tag-mode nil t)
-                         (read-string "Search tags: ")))))
+  (interactive (list (cond
+                       ((tiles--tags-inhibited-p)
+                        (user-error "Tag search is disabled (tiles-tag-mode is inhibit)"))
+                       ((tiles--tags-restricted-p)
+                        (completing-read "Search tag: " tiles-tag-mode nil t))
+                       ((tiles--tags-required-one-of-p)
+                        (completing-read
+                         (format "Search tags (required: %s): "
+                                 (mapconcat #'identity (tiles--tags-required-list) ", "))
+                         (tiles--tags-required-list) nil nil))
+                       (t (read-string "Search tags: ")))))
   (let* ((query-tags (tiles--parse-tag-query query))
          (files (tiles--get-all-tile-files))
          (results nil))
@@ -1236,11 +1297,17 @@ Equal to `tiles-preview-length' + `tiles-line-padding' + longest tag string leng
 
 (defun tiles-notes-filter-tag (query)
   "Filter the dashboard to show only notes matching QUERY tags."
-  (interactive (list (if (tiles--tags-inhibited-p)
-                         (user-error "Tag filtering is disabled (tiles-tag-mode is inhibit)")
-                       (if (tiles--tags-restricted-p)
-                           (completing-read "Filter by tag: " tiles-tag-mode nil t)
-                         (read-string "Filter by tag: ")))))
+  (interactive (list (cond
+                       ((tiles--tags-inhibited-p)
+                        (user-error "Tag filtering is disabled (tiles-tag-mode is inhibit)"))
+                       ((tiles--tags-restricted-p)
+                        (completing-read "Filter by tag: " tiles-tag-mode nil t))
+                       ((tiles--tags-required-one-of-p)
+                        (completing-read
+                         (format "Filter by tag (required: %s): "
+                                 (mapconcat #'identity (tiles--tags-required-list) ", "))
+                         (tiles--tags-required-list) nil nil))
+                       (t (read-string "Filter by tag: ")))))
   (if (string-empty-p (string-trim query))
       (tiles-notes-clear-filter)
     (setq tiles--notes-page 0)
@@ -1259,11 +1326,17 @@ Equal to `tiles-preview-length' + `tiles-line-padding' + longest tag string leng
 (defun tiles-notes-exclude-tags (query)
   "Exclude notes with any of the specified tags from the dashboard.
 QUERY is a space-separated list of tags to exclude."
-  (interactive (list (if (tiles--tags-inhibited-p)
-                         (user-error "Tag exclusion is disabled (tiles-tag-mode is inhibit)")
-                       (if (tiles--tags-restricted-p)
-                           (completing-read "Exclude tag: " tiles-tag-mode nil t)
-                         (read-string "Exclude tags (space-separated): ")))))
+  (interactive (list (cond
+                       ((tiles--tags-inhibited-p)
+                        (user-error "Tag exclusion is disabled (tiles-tag-mode is inhibit)"))
+                       ((tiles--tags-restricted-p)
+                        (completing-read "Exclude tag: " tiles-tag-mode nil t))
+                       ((tiles--tags-required-one-of-p)
+                        (completing-read
+                         (format "Exclude tag (required: %s): "
+                                 (mapconcat #'identity (tiles--tags-required-list) ", "))
+                         (tiles--tags-required-list) nil nil))
+                       (t (read-string "Exclude tags (space-separated): ")))))
   (if (string-empty-p (string-trim query))
       (message "No tags specified")
     (setq tiles--notes-page 0)
