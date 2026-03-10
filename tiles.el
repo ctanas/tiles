@@ -4,7 +4,7 @@
 ;; distributed under the terms of the GNU General Public License (Version 3, 29 June 2007)
 
 ;; Author: Claudiu Tănăselia
-;; Version: 0.3.4
+;; Version: 0.3.5
 ;; Package-Requires: ((emacs "27.1"))
 ;; Keywords: notes, org
 ;; URL: https://github.com/ctanas/tiles
@@ -148,6 +148,11 @@
 ;;
 ;; Changelog:
 ;;
+;;   0.3.5 - Tag mode control: tiles-tag-mode can be `unrestricted' (default),
+;;           `inhibit' (no tags, tag search/filter disabled), or a list of
+;;           allowed tag strings (completion-based input, first element is default).
+;;           Fix: deleting the last note now refreshes the dashboard to an empty
+;;           state instead of leaving the deleted note visible.
 ;;   0.3.4 - Keyword rename: R in keyword list renames a keyword across all notes.
 ;;   0.3.3 - Unicode box-drawing dashboard separators, tag-line fontification,
 ;;           focus mode from stitched view.
@@ -169,7 +174,7 @@
 (require 'org)
 (require 'lunar)
 
-(defconst tiles-version "0.3.4"
+(defconst tiles-version "0.3.5"
   "Current version of TILES.")
 
 ;;; Customization
@@ -221,6 +226,22 @@ Uses ═ and ─ instead of = and -.  Set to nil for plain ASCII."
   :type 'boolean
   :group 'tiles)
 
+(defcustom tiles-tag-mode 'unrestricted
+  "Controls how tags are handled in TILES.
+
+Possible values:
+- `unrestricted' (default): tags work normally; any tag string is accepted.
+- `inhibit': tags are disabled.  Capture does not prompt for tags, notes
+  are saved with a placeholder tag internally, and tag-based search and
+  filtering in the dashboard are disabled.
+- A list of strings: only those tags are accepted.  Prompts use completion
+  restricted to the list.  The first element is applied as the default when
+  the user provides no input."
+  :type '(choice (const :tag "Unrestricted (default)" unrestricted)
+                 (const :tag "Inhibit tags" inhibit)
+                 (repeat :tag "Allowed tags list" string))
+  :group 'tiles)
+
 ;;; Internal Variables
 
 (defvar tiles--current-search-results nil
@@ -235,6 +256,16 @@ Uses ═ and ─ instead of = and -.  Set to nil for plain ASCII."
 (defvar tiles--cache (make-hash-table :test 'equal)
   "Cache of parsed note data, keyed by filepath.
 Values are (MTIME . PARSED-DATA).")
+
+(defvar tiles-debug nil
+  "When non-nil, display performance diagnostics after each dashboard load.
+Enable at runtime with (setq tiles-debug t).  Off by default.")
+
+(defvar tiles--debug-cache-hits 0
+  "Cache hit count during the last dashboard load.  Internal debug counter.")
+
+(defvar tiles--debug-cache-misses 0
+  "Cache miss count (disk reads) during the last dashboard load.  Internal debug counter.")
 
 (defvar tiles--preview-buffer-name "*Tile Preview*"
   "Name of the preview buffer.")
@@ -322,10 +353,16 @@ Results are cached and only re-parsed when the file's mtime changes."
     (let* ((mtime (file-attribute-modification-time (file-attributes filepath)))
            (cached (gethash filepath tiles--cache)))
       (if (and cached (equal (car cached) mtime))
-          (cdr cached)
-        (let ((result (tiles--parse-note-file-uncached filepath)))
-          (puthash filepath (cons mtime result) tiles--cache)
-          result)))))
+          (progn
+            (when tiles-debug
+              (setq tiles--debug-cache-hits (1+ tiles--debug-cache-hits)))
+            (cdr cached))
+        (progn
+          (when tiles-debug
+            (setq tiles--debug-cache-misses (1+ tiles--debug-cache-misses)))
+          (let ((result (tiles--parse-note-file-uncached filepath)))
+            (puthash filepath (cons mtime result) tiles--cache)
+            result))))))
 
 (defun tiles--parse-note-file-uncached (filepath)
   "Parse a TILES note file at FILEPATH without caching.
@@ -483,6 +520,30 @@ Searches up to LIMIT.  Returns non-nil and sets match data if found."
   (when font-lock-mode
     (font-lock-flush)))
 
+;;; Tag mode helpers
+
+(defun tiles--tags-inhibited-p ()
+  "Return non-nil when tag usage is suppressed by `tiles-tag-mode'."
+  (eq tiles-tag-mode 'inhibit))
+
+(defun tiles--tags-restricted-p ()
+  "Return non-nil when tags are restricted to the `tiles-tag-mode' list."
+  (listp tiles-tag-mode))
+
+(defun tiles--prompt-for-tags (&optional prompt)
+  "Prompt for tags according to `tiles-tag-mode'.
+Returns a slash-separated tag string, or nil when tags are inhibited.
+PROMPT overrides the default prompt string."
+  (cond
+   ((tiles--tags-inhibited-p) nil)
+   ((tiles--tags-restricted-p)
+    (let* ((allowed tiles-tag-mode)
+           (default (car allowed))
+           (pr (or prompt (format "Tag (default: %s): " default)))
+           (input (completing-read pr allowed nil t nil nil default)))
+      (if (string-empty-p (string-trim input)) default input)))
+   (t (read-string (or prompt "Tags (separated by /): ")))))
+
 ;;; Capture Mode
 
 (defvar tiles-capture-mode-map
@@ -514,7 +575,9 @@ Searches up to LIMIT.  Returns non-nil and sets match data if found."
     (goto-char (point-min))
     (when tiles-focus-default
       (tiles-focus-mode 1))
-    (message "Write your note, prepend with && any meta paragraph (optional), place tag(s) on the last line (separated by /), then hit C-c")))
+    (if (tiles--tags-inhibited-p)
+        (message "TILES: Write your note, then C-c C-c to save (C-c C-k to cancel)")
+      (message "Write your note, prepend with && any meta paragraph (optional), place tag(s) on the last line (separated by /), then hit C-c"))))
 
 ;;;###autoload
 (defalias 'tiles-capture #'tiles-new
@@ -526,39 +589,66 @@ Searches up to LIMIT.  Returns non-nil and sets match data if found."
   (when (bound-and-true-p tiles-focus-mode)
     (tiles-focus-mode -1))
   (let ((content (buffer-string)))
-    (let ((valid (tiles--validate-note-format content)))
-      (when (not (eq valid t))
-        ;; Offer to add tags
-        (let ((tags (read-string (format "%s. Add tags (separated by /): " valid))))
-          (if (string-empty-p (string-trim tags))
-              (user-error "Aborted: note needs tags")
+    ;; Step 1: resolve tags per tiles-tag-mode
+    (cond
+     ((tiles--tags-inhibited-p)
+      ;; Auto-insert placeholder tag when the format is not yet valid
+      (when (not (eq (tiles--validate-note-format content) t))
+        (goto-char (point-max))
+        (unless (looking-back "\n\n" nil)
+          (unless (looking-back "\n" nil) (insert "\n"))
+          (insert "\n"))
+        (insert "-\n")
+        (setq content (buffer-string))))
+     (t
+      ;; Prompt for tags if missing
+      (let ((valid (tiles--validate-note-format content)))
+        (when (not (eq valid t))
+          (let ((tags (if (tiles--tags-restricted-p)
+                          (tiles--prompt-for-tags (format "%s. Add tag: " valid))
+                        (read-string (format "%s. Add tags (separated by /): " valid)))))
+            (when (or (null tags) (string-empty-p (string-trim tags)))
+              (user-error "Aborted: note needs tags"))
             (goto-char (point-max))
-            ;; Ensure blank line before tags
             (unless (looking-back "\n\n" nil)
-              (unless (looking-back "\n" nil)
-                (insert "\n"))
+              (unless (looking-back "\n" nil) (insert "\n"))
               (insert "\n"))
             (insert tags "\n")
-            (setq content (buffer-string))
-            (setq valid (tiles--validate-note-format content))
-            (when (not (eq valid t))
-              (user-error "Still invalid: %s" valid)))))
-      (when (eq valid t)
-        (tiles--ensure-directory)
-        (let* ((filename (tiles--generate-filename))
-               (filepath (expand-file-name filename tiles-directory)))
-          ;; Ensure we don't overwrite
-          (while (file-exists-p filepath)
-            (sleep-for 0 100)
-            (setq filename (tiles--generate-filename))
-            (setq filepath (expand-file-name filename tiles-directory)))
-          (write-region content nil filepath)
-          (tiles-capture-mode -1)
-          (kill-buffer)
-          ;; Refresh dashboard if it exists
-          (when (get-buffer tiles--notes-buffer-name)
-            (tiles-show-notes))
-          (message "Saved: %s" filename))))))
+            (setq content (buffer-string)))))))
+    ;; Step 2: final format validation
+    (let ((valid (tiles--validate-note-format content)))
+      (unless (eq valid t)
+        (user-error "%s" valid))
+      ;; Step 3: in restricted mode, verify every tag is in the allowed list
+      (when (tiles--tags-restricted-p)
+        (let* ((lines (split-string content "\n"))
+               (i (1- (length lines))))
+          (while (and (>= i 0) (string-empty-p (string-trim (nth i lines))))
+            (setq i (1- i)))
+          (when (>= i 0)
+            (let* ((tag-line (string-trim (nth i lines)))
+                   (tags (split-string tag-line "/" t "[ \t]+"))
+                   (invalid (seq-remove (lambda (tag) (member tag tiles-tag-mode)) tags)))
+              (when invalid
+                (user-error "Tag(s) not in allowed list: %s.  Allowed: %s"
+                            (mapconcat #'identity invalid ", ")
+                            (mapconcat #'identity tiles-tag-mode ", ")))))))
+      ;; Step 4: save
+      (tiles--ensure-directory)
+      (let* ((filename (tiles--generate-filename))
+             (filepath (expand-file-name filename tiles-directory)))
+        ;; Ensure we don't overwrite
+        (while (file-exists-p filepath)
+          (sleep-for 0 100)
+          (setq filename (tiles--generate-filename))
+          (setq filepath (expand-file-name filename tiles-directory)))
+        (write-region content nil filepath)
+        (tiles-capture-mode -1)
+        (kill-buffer)
+        ;; Refresh dashboard if it exists
+        (when (get-buffer tiles--notes-buffer-name)
+          (tiles-show-notes))
+        (message "Saved: %s" filename)))))
 
 (defun tiles-capture-cancel ()
   "Cancel the current TILES capture."
@@ -675,15 +765,16 @@ Must be visiting a TILES note file.  Asks for confirmation."
 ;;;###autoload
 (defun tiles-quick ()
   "Quick capture a note via the minibuffer.
-Prompts for content, then tags."
+Prompts for content, then tags per `tiles-tag-mode'."
   (interactive)
-  (let ((content (read-string "Note: "))
-        (tags (read-string "Tags (separated by /): ")))
+  (let* ((content (read-string "Note: "))
+         (tags (tiles--prompt-for-tags)))
     (when (string-empty-p (string-trim content))
       (user-error "Note content cannot be empty"))
-    (when (string-empty-p (string-trim tags))
+    (when (and (not (tiles--tags-inhibited-p))
+               (or (null tags) (string-empty-p (string-trim tags))))
       (user-error "Tags cannot be empty"))
-    (tiles--quick-save content tags)))
+    (tiles--quick-save content (or tags "-"))))
 
 ;;;###autoload
 (defun tiles-yank ()
@@ -692,12 +783,13 @@ Pre-fills content from the kill ring, then prompts for tags."
   (interactive)
   (let* ((clip (or (current-kill 0 t) ""))
          (content (read-string "Note: " clip))
-         (tags (read-string "Tags (separated by /): ")))
+         (tags (tiles--prompt-for-tags)))
     (when (string-empty-p (string-trim content))
       (user-error "Note content cannot be empty"))
-    (when (string-empty-p (string-trim tags))
+    (when (and (not (tiles--tags-inhibited-p))
+               (or (null tags) (string-empty-p (string-trim tags))))
       (user-error "Tags cannot be empty"))
-    (tiles--quick-save content tags)))
+    (tiles--quick-save content (or tags "-"))))
 
 ;;; Search Functions
 
@@ -708,7 +800,11 @@ QUERY uses / for AND and space for OR.
 \"b218/lx2026\" matches notes with both tags.
 \"b218 misc\" matches notes with either tag.
 \"b218/lx2026 misc\" matches (b218 AND lx2026) OR misc."
-  (interactive "sSearch tags: ")
+  (interactive (list (if (tiles--tags-inhibited-p)
+                         (user-error "Tag search is disabled (tiles-tag-mode is inhibit)")
+                       (if (tiles--tags-restricted-p)
+                           (completing-read "Search tag: " tiles-tag-mode nil t)
+                         (read-string "Search tags: ")))))
   (let* ((query-tags (tiles--parse-tag-query query))
          (files (tiles--get-all-tile-files))
          (results nil))
@@ -927,6 +1023,8 @@ Returns (tags-hash . keywords-hash) where values are counts."
 Tags that also appear as keywords are shown in bold.
 Press RET to filter the dashboard by the selected tag."
   (interactive)
+  (when (tiles--tags-inhibited-p)
+    (user-error "Tag listing is disabled (tiles-tag-mode is inhibit)"))
   (let* ((data (tiles--list-collect-data))
          (buf (get-buffer-create "*Tiles Tags*")))
     (with-current-buffer buf
@@ -1138,7 +1236,11 @@ Equal to `tiles-preview-length' + `tiles-line-padding' + longest tag string leng
 
 (defun tiles-notes-filter-tag (query)
   "Filter the dashboard to show only notes matching QUERY tags."
-  (interactive "sFilter by tag: ")
+  (interactive (list (if (tiles--tags-inhibited-p)
+                         (user-error "Tag filtering is disabled (tiles-tag-mode is inhibit)")
+                       (if (tiles--tags-restricted-p)
+                           (completing-read "Filter by tag: " tiles-tag-mode nil t)
+                         (read-string "Filter by tag: ")))))
   (if (string-empty-p (string-trim query))
       (tiles-notes-clear-filter)
     (setq tiles--notes-page 0)
@@ -1157,7 +1259,11 @@ Equal to `tiles-preview-length' + `tiles-line-padding' + longest tag string leng
 (defun tiles-notes-exclude-tags (query)
   "Exclude notes with any of the specified tags from the dashboard.
 QUERY is a space-separated list of tags to exclude."
-  (interactive "sExclude tags (space-separated): ")
+  (interactive (list (if (tiles--tags-inhibited-p)
+                         (user-error "Tag exclusion is disabled (tiles-tag-mode is inhibit)")
+                       (if (tiles--tags-restricted-p)
+                           (completing-read "Exclude tag: " tiles-tag-mode nil t)
+                         (read-string "Exclude tags (space-separated): ")))))
   (if (string-empty-p (string-trim query))
       (message "No tags specified")
     (setq tiles--notes-page 0)
@@ -1259,9 +1365,16 @@ Uses `tiles--notes-exclude'."
   "Display all notes chronologically, newest first.
 Shows a dashboard with statistics and note listing."
   (interactive)
-  (let* ((all-files (tiles--get-all-tile-files))
-         (filtered (tiles--apply-filter all-files)))
-    (if (not all-files)
+  (when tiles-debug
+    (setq tiles--debug-cache-hits 0
+          tiles--debug-cache-misses 0))
+  (let* ((tiles--debug-t0 (when tiles-debug (float-time)))
+         (all-files (tiles--get-all-tile-files))
+         (tiles--debug-t1 (when tiles-debug (float-time)))
+         (filtered (tiles--apply-filter all-files))
+         (tiles--debug-t2 (when tiles-debug (float-time))))
+    (if (and (not all-files)
+             (not (string= (buffer-name) tiles--notes-buffer-name)))
         (message "No tiles notes found in %s" tiles-directory)
       (let* ((buf (get-buffer-create tiles--notes-buffer-name))
              (start-time (float-time))
@@ -1295,7 +1408,9 @@ Shows a dashboard with statistics and note listing."
                  (title (format "  *T*agged *I*nstant *L*ightweight *E*macs *S*nippets (TILES), v%s | %d notes | loaded in %.3fs\n"
                                 tiles-version num-all load-time))
                  (keys (concat "  [SPC] view, [RET] open, [TAB] expand, [f] format, [d] chg date, [u] touch, [0] stitch, [D] delete, [g] refresh, [+] more, [q] quit\n"
-                               "  [t] filter tag, [k] filter keyword, [F] exclude tags, [T] list tags, [K] list keywords, [c] clr search, [C] clr excl, [l] new tile\n"))
+                               (if (tiles--tags-inhibited-p)
+                                   "  [k] filter keyword, [K] list keywords, [c] clr search, [l] new tile\n"
+                                 "  [t] filter tag, [k] filter keyword, [F] exclude tags, [T] list tags, [K] list keywords, [c] clr search, [C] clr excl, [l] new tile\n")))
                  (lunar-str (or (condition-case nil
                                     (tiles--next-lunar-event)
                                   (error nil))
@@ -1325,7 +1440,16 @@ Shows a dashboard with statistics and note listing."
                     (propertize eq-line 'face 'font-lock-comment-face 'tiles-header t)
                     (propertize keys 'face 'font-lock-comment-face 'tiles-header t)
                     (propertize status-line 'face 'font-lock-comment-face 'tiles-header t)
-                    (propertize dash-line 'face 'font-lock-comment-face 'tiles-header t))))
+                    (propertize dash-line 'face 'font-lock-comment-face 'tiles-header t))
+            (when tiles-debug
+              (message "[TILES debug] %d files total, %d displayed | scan %.1fms | filter %.1fms | render %.1fms | total %.1fms | cache: %d hits, %d misses"
+                       num-all (length files)
+                       (* 1000.0 (- tiles--debug-t1 tiles--debug-t0))
+                       (* 1000.0 (- tiles--debug-t2 tiles--debug-t1))
+                       (* 1000.0 load-time)
+                       (* 1000.0 (- (float-time) tiles--debug-t0))
+                       tiles--debug-cache-hits
+                       tiles--debug-cache-misses))))
         (tiles-notes-view-mode)
         ;; Move past header to first note line
         (goto-char (point-min))
@@ -1663,7 +1787,9 @@ Prompts for a new date in YYYY-MM-DD HH:MM or YYYY-MM-DD HH:MM:SS format."
          (note-data (tiles--parse-note-file file))
          (preview (if note-data (tiles--note-oneline-preview note-data) ""))
          (tags (when note-data (plist-get note-data :tags)))
-         (tag-str (if tags (concat "  " (mapconcat #'identity tags "/")) ""))
+         (tag-str (if (and tags (not (tiles--tags-inhibited-p)))
+                      (concat "  " (mapconcat #'identity tags "/"))
+                    ""))
          (preview-padded (if (< (length preview) tiles-preview-length)
                              (concat preview (make-string (- tiles-preview-length (length preview)) ?\s))
                            preview))
