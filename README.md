@@ -33,7 +33,7 @@ A regular note, expanded to reveal the keywoards:
 A note with meta-content, expanded to reveal the meta-content (meta-content is not exported, nor visible with stitching):
 <img width="1440" height="900" alt="Screenshot 2026-02-09 at 14 14 56" src="https://github.com/user-attachments/assets/1bf187fe-dfec-4ca8-b44a-8b3082c5a05e" />
 
-An example of a regular note, no title, Org Mode markup, tags on the last line (mandatory):
+An example of a regular note, no title, Org Mode markup, tags on the last line (mandatory by default but can be disabled, see `tiles-tag-mode` below):
 <img width="2880" height="1800" alt="Screenshot 2026-02-09 at 14 15 27" src="https://github.com/user-attachments/assets/95150e31-c0ae-48ec-af5f-10b07016b8f8" />
 
 An example of a note with meta-content, added after main content, prefixed with `&&`:
@@ -60,7 +60,7 @@ space/mars
 - Content: paragraph(s) with full org-mode formatting (`*bold*`, `/italic/`, `[[links]]`, inline footnotes);
 - Optional private paragraphs prefixed with `&&` (see [Private paragraphs](#private-paragraphs) below);
 - Blank line separator after the content;
-- Last non-empty line: tags separated by `/` (always parsed as the tag line); tags are mandatory;
+- Last non-empty line: tags separated by `/` (always parsed as the tag line); tags are mandatory by default, but can be disabled;
 - Bold words (`*word*`) double as searchable keywords (optional);
 - Multi-paragraph notes are supported but discouraged; the parser always takes the last non-empty line as tags.
 
@@ -215,7 +215,7 @@ Press `SPC` from the search view to enter the **stitched view**: all matching no
 
 ### Capturing notes
 
-`C-c m n` opens a capture buffer. Write your paragraph, add a blank line, then your tags. Press `C-c C-c` to save, `C-c C-k` to cancel. While keywords are not mandatory, tags are, so if the user forgets to add tags, it will be asked to do so. The tag line (last line) is displayed in red using the `tiles-tags` face, matching the tag color in the dashboard.
+`C-c m n` opens a capture buffer. Write your paragraph, add a blank line, then your tags. Press `C-c C-c` to save, `C-c C-k` to cancel. While keywords are not mandatory, tags are (by default), so if the user forgets to add tags, it will be asked to do so. The tag line (last line) is displayed in red using the `tiles-tags` face, matching the tag color in the dashboard.
 
 Inside the capture buffer, `C-c m t` (`tiles-insert-tag`) inserts a tag at point using minibuffer completion:
 - **Unrestricted mode**: suggests all tags found in existing notes (free input allowed).

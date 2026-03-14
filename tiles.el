@@ -1,40 +1,39 @@
 ;;; tiles.el --- Tagged Instant Lightweight Emacs Snippets -*- lexical-binding: t; -*-
 
-;; Copyright 2026 Claudiu Tănăselia
-;; distributed under the terms of the GNU General Public License (Version 3, 29 June 2007)
-
 ;; Author: Claudiu Tănăselia
-;; Version: 0.3.5
+;; Version: 0.4
 ;; Package-Requires: ((emacs "27.1"))
 ;; Keywords: notes, org
 ;; URL: https://github.com/ctanas/tiles
 
 ;;; Commentary:
-
 ;; TILES (Tagged Instant Lightweight Emacs Snippets) is a note-taking
-;; system where each note is a single paragraph stored in its own file.
-;; Notes are organized through tags and bold keywords rather than
-;; hierarchies or titles.
+;; system where each note is a title-less, single paragraph stored
+;; in its own file. Notes are organized through tags and bold keywords
+;; rather than hierarchies or titles. A dashboard offers a bird's-eye
+;; view of notes and allows note manipulation: create, edit, delete,
+;; stitch view mode, and more.
 ;;
 ;; Note file format (TYYYYMMDDHHMMSS.org):
 ;;
-;;   This is the paragraph.  *Bold words* are searchable keywords.
+;;   This is the paragraph. *Bold words* are searchable keywords.
 ;;   /Italic/ and [[links]] are supported.  Inline footnotes[fn:: like
-;;   this] are stripped from previews.
+;;   this] are stripped from previews. Org Mode format is recommended.
 ;;
-;;   && This is a private paragraph.  It is hidden from previews,
-;;   stitched views, and dynamic blocks.  Only visible when expanding
+;;   && This is a private paragraph. It is hidden from previews,
+;;   stitched views, and dynamic blocks. Only visible when expanding
 ;;   a note with TAB in the dashboard or editing the file directly.
 ;;
 ;;   tag1/tag2/tag3
 ;;
-;; The last non-empty line is always the tag line; everything above
-;; (separated by a blank line) is content.  Multi-paragraph notes work.
-;; Paragraphs starting with && are private (hidden from all views
-;; except TAB expansion and direct editing).
+;; The last non-empty line is always the tag line; everything above it
+;; (separated by a blank line) is content. Multi-paragraph notes work,
+;; but they are discouraged and not considered to be in the spirit of
+;; TILES. Paragraphs starting with && are private (hidden from all
+;; views except TAB expansion and direct editing).
 ;;
 ;; Features:
-;; - Atomic notes: one paragraph per file, no titles needed
+;; - Atomic notes: one paragraph per file, no titles required
 ;; - Timestamp naming: files named TYYYYMMDDHHMMSS.org
 ;; - Tag-based organization via slash-separated tag lines
 ;; - Keyword extraction: bold words (*word*) are searchable; hyphens
@@ -53,7 +52,7 @@
 ;; - Private paragraphs: && prefix hides content from all views
 ;;   except TAB expansion and direct file editing
 ;; - Focus mode: distraction-free editing with centered ~80-char
-;;   body, olivetti-style (tiles-focus-mode, enabled by default)
+;;   body, (tiles-focus-mode, enabled by default)
 ;; - Tag/keyword listing with occurrence counts, sorting, and keyword rename
 ;; - Tag-line fontification: tag line shown in red when editing notes
 ;; - Unicode box-drawing dashboard separators (tiles-fancy-separators)
@@ -128,7 +127,6 @@
 ;;   tiles-clear-cache - Force reload of all note data from disk
 ;;   tiles-show-notes  - Open the dashboard (also C-c m m)
 ;;   tiles-new         - Create a new note (also C-c m n)
-;;   tiles-focus-mode  - Toggle focus mode for distraction-free editing
 ;;   tiles-capture     - Alias for tiles-new
 ;;   tiles-quick       - Quick capture via minibuffer (also C-c m q)
 ;;   tiles-yank        - Quick capture from clipboard (also C-c m y)
@@ -148,6 +146,7 @@
 ;;
 ;; Changelog:
 ;;
+;;   0.4   - First MELPA release;
 ;;   0.3.5 - Tag mode control: tiles-tag-mode can be `unrestricted' (default),
 ;;           `inhibit' (no tags, tag search/filter disabled), a list of allowed
 ;;           tag strings (completion-based, first element is default), or
@@ -176,7 +175,7 @@
 (require 'org)
 (require 'lunar)
 
-(defconst tiles-version "0.3.5"
+(defconst tiles-version "0.4"
   "Current version of TILES.")
 
 ;;; Customization
@@ -2252,8 +2251,8 @@ and :separator (string between notes, default blank line)."
     map)
   "Keymap for TILES commands, bound under `C-c m'.")
 
-;;;###autoload
-(global-set-key (kbd "C-c m") tiles-command-map)
+;; To bind the command map, add to your init.el:
+;; (global-set-key (kbd "C-c m") tiles-command-map)
 
 (provide 'tiles)
 ;;; tiles.el ends here
