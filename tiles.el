@@ -6,6 +6,8 @@
 ;; Keywords: notes, org
 ;; URL: https://github.com/ctanas/tiles
 
+;; SPDX-License-Identifier: GPL-3.0-or-later
+
 ;;; Commentary:
 ;; TILES (Tagged Instant Lightweight Emacs Snippets) is a note-taking
 ;; system where each note is a title-less, single paragraph stored
@@ -271,7 +273,8 @@ Enable at runtime with (setq tiles-debug t).  Off by default.")
   "Cache hit count during the last dashboard load.  Internal debug counter.")
 
 (defvar tiles--debug-cache-misses 0
-  "Cache miss count (disk reads) during the last dashboard load.  Internal debug counter.")
+  "Cache miss count (disk reads) during the last dashboard load.
+Internal debug counter.")
 
 (defvar tiles--preview-buffer-name "*Tile Preview*"
   "Name of the preview buffer.")
@@ -281,6 +284,29 @@ Enable at runtime with (setq tiles-debug t).  Off by default.")
 
 (defvar tiles--stitched-buffer-name "*Tiles Stitched View*"
   "Name of the stitched view buffer.")
+
+(defvar tiles--notes-buffer-name "*Tiles Notes*"
+  "Name of the notes viewer buffer.")
+
+(defvar tiles--notes-filter nil
+  "Current dashboard filter as (TYPE . QUERY) or nil.
+TYPE is `tag' or `keyword'.")
+
+(defvar tiles--notes-exclude nil
+  "List of tags to exclude from dashboard display and search.
+Set by `F' in the dashboard, cleared by `c'.")
+
+(defvar-local tiles--line-target-width 135
+  "Computed target width for note lines in the dashboard.
+Equal to `tiles-preview-length' + `tiles-line-padding' +
+longest tag string length.")
+(put 'tiles--line-target-width 'permanent-local t)
+
+(defvar tiles--notes-page 0
+  "Current page offset in the dashboard (0-indexed).")
+
+(defvar tiles--preview-file nil
+  "Filepath currently shown in the preview split.")
 
 ;;; Utility Functions
 
@@ -344,7 +370,8 @@ Uses Emacs's built-in lunar phase computation."
   (concat (tiles--generate-timestamp) ".org"))
 
 (defun tiles--get-all-tile-files ()
-  "Get all tile files from `tiles-directory' and subdirectories, sorted newest first."
+  "Get all tile files from `tiles-directory' and subdirectories.
+Returned list is sorted newest first."
   (when (file-exists-p tiles-directory)
     (let ((files (directory-files-recursively tiles-directory "^T[0-9]\\{14\\}\\.org$")))
       (sort files (lambda (a b)
@@ -693,7 +720,7 @@ Set tiles-tag-mode to 'unrestricted or a tag list to enable them.")
              (filepath (expand-file-name filename tiles-directory)))
         ;; Ensure we don't overwrite
         (while (file-exists-p filepath)
-          (sleep-for 0 100)
+          (sleep-for 0.1)
           (setq filename (tiles--generate-filename))
           (setq filepath (expand-file-name filename tiles-directory)))
         (write-region content nil filepath)
@@ -808,7 +835,7 @@ Must be visiting a TILES note file.  Asks for confirmation."
          (filepath (expand-file-name filename tiles-directory))
          (note (concat content "\n\n" tags "\n")))
     (while (file-exists-p filepath)
-      (sleep-for 0 100)
+      (sleep-for 0.1)
       (setq filename (tiles--generate-filename))
       (setq filepath (expand-file-name filename tiles-directory)))
     (write-region note nil filepath)
@@ -1117,9 +1144,6 @@ Press RET to filter the dashboard by the selected keyword."
 
 ;;; Notes Viewer
 
-(defvar tiles--notes-buffer-name "*Tiles Notes*"
-  "Name of the notes viewer buffer.")
-
 (defvar tiles-notes-view-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "n") #'tiles-notes-next)
@@ -1277,22 +1301,6 @@ Otherwise renders with bold/italic faces, stripping footnotes and links."
        ((< age-days 1) 'tiles-timestamp-today)
        ((< age-days 14) 'tiles-timestamp-recent)
        (t 'tiles-timestamp-old)))))
-
-(defvar tiles--notes-filter nil
-  "Current dashboard filter as (TYPE . QUERY) or nil.
-TYPE is `tag' or `keyword'.")
-
-(defvar tiles--notes-exclude nil
-  "List of tags to exclude from dashboard display and search.
-Set by `F' in the dashboard, cleared by `c'.")
-
-(defvar-local tiles--line-target-width 135
-  "Computed target width for note lines in the dashboard.
-Equal to `tiles-preview-length' + `tiles-line-padding' + longest tag string length.")
-(put 'tiles--line-target-width 'permanent-local t)
-
-(defvar tiles--notes-page 0
-  "Current page offset in the dashboard (0-indexed).")
 
 (defun tiles-notes-filter-tag (query)
   "Filter the dashboard to show only notes matching QUERY tags."
@@ -1590,9 +1598,6 @@ Shows a dashboard with statistics and note listing."
       (when tiles-focus-default
         (tiles-focus-mode 1)))))
 
-(defvar tiles--preview-file nil
-  "Filepath currently shown in the preview split.")
-
 (defun tiles-notes-preview ()
   "Open the note on the current line in a split below for editing."
   (interactive)
@@ -1774,7 +1779,8 @@ Shows a dashboard with statistics and note listing."
         (forward-line 1)))))
 
 (defun tiles-notes-stitch ()
-  "Stitch the currently displayed notes into a flowing view, respecting display order."
+  "Stitch the currently displayed notes into a flowing view.
+Respects manual display order set by M-up/M-down."
   (interactive)
   (let ((files (tiles--notes-displayed-files)))
     (if (not files)
