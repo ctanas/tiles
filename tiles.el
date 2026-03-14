@@ -11,27 +11,27 @@
 ;;; Commentary:
 ;; TILES (Tagged Instant Lightweight Emacs Snippets) is a note-taking
 ;; system where each note is a title-less, single paragraph stored
-;; in its own file. Notes are organized through tags and bold keywords
-;; rather than hierarchies or titles. A dashboard offers a bird's-eye
+;; in its own file.  Notes are organized through tags and bold keywords
+;; rather than hierarchies or titles.  A dashboard offers a bird's-eye
 ;; view of notes and allows note manipulation: create, edit, delete,
 ;; stitch view mode, and more.
 ;;
 ;; Note file format (TYYYYMMDDHHMMSS.org):
 ;;
-;;   This is the paragraph. *Bold words* are searchable keywords.
+;;   This is the paragraph.  *Bold words* are searchable keywords.
 ;;   /Italic/ and [[links]] are supported.  Inline footnotes[fn:: like
-;;   this] are stripped from previews. Org Mode format is recommended.
+;;   this] are stripped from previews.  Org Mode format is recommended.
 ;;
-;;   && This is a private paragraph. It is hidden from previews,
-;;   stitched views, and dynamic blocks. Only visible when expanding
+;;   && This is a private paragraph.  It is hidden from previews,
+;;   stitched views, and dynamic blocks.  Only visible when expanding
 ;;   a note with TAB in the dashboard or editing the file directly.
 ;;
 ;;   tag1/tag2/tag3
 ;;
 ;; The last non-empty line is always the tag line; everything above it
-;; (separated by a blank line) is content. Multi-paragraph notes work,
+;; (separated by a blank line) is content.  Multi-paragraph notes work,
 ;; but they are discouraged and not considered to be in the spirit of
-;; TILES. Paragraphs starting with && are private (hidden from all
+;; TILES.  Paragraphs starting with && are private (hidden from all
 ;; views except TAB expansion and direct editing).
 ;;
 ;; Features:
@@ -118,7 +118,7 @@
 ;;
 ;; Keyword search syntax:
 ;;   space     - OR (any term matches)
-;;   Example: "emacs lisp" = emacs OR lisp
+;;   Example: "emacs Lisp" = Emacs OR Lisp
 ;;
 ;; Other commands (M-x):
 ;;   tiles-touch       - Update a note's timestamp to now (renames file)
@@ -199,7 +199,7 @@ Notes are loaded recursively from subdirectories."
   :group 'tiles)
 
 (defcustom tiles-preview-raw t
-  "When non-nil, strip all org-mode formatting from dashboard previews.
+  "When non-nil, strip all `org-mode' formatting from dashboard previews.
 Shows plain text without bold, italic, links, or footnotes markup."
   :type 'boolean
   :group 'tiles)
@@ -435,7 +435,7 @@ Everything before it (minus the trailing blank separator) is content."
   (message "Tiles cache cleared"))
 
 (defun tiles--private-paragraph-p (paragraph)
-  "Return non-nil if PARAGRAPH starts with &&."
+  "Return non-nil if PARAGRAPH start with &&."
   (string-prefix-p "&&" (string-trim-left paragraph)))
 
 (defun tiles--strip-private-paragraphs (content)
@@ -457,7 +457,7 @@ Everything before it (minus the trailing blank separator) is content."
 
 (defun tiles--extract-keywords (text)
   "Extract bold keywords from TEXT.
-Bold words in org-mode are surrounded by *asterisks*.
+Bold words in `org-mode' are surrounded by *asterisks*.
 Hyphens are normalized to spaces so \"Falcon-9\" and \"Falcon 9\" are equivalent."
   (let ((keywords nil)
         (pos 0))
@@ -1238,7 +1238,7 @@ FILENAME should match TYYYYMMDDHHMMSS.org."
   :group 'tiles)
 
 (defun tiles--strip-org-markup (text)
-  "Strip all org-mode markup from TEXT, returning plain text."
+  "Strip all `org-mode' markup from TEXT, returning plain text."
   (let ((result text))
     (setq result (replace-regexp-in-string "\\[fn:[^]]*\\]" "" result))
     (setq result (replace-regexp-in-string "\\[\\[\\(?:[^][]+\\)\\]\\[\\([^][]+\\)\\]\\]" "\\1" result))
@@ -1351,7 +1351,7 @@ QUERY is a space-separated list of tags to exclude."
     (tiles-show-notes)))
 
 (defun tiles-notes-clear-filter ()
-  "Clear the dashboard search filter (keeps exclusions)."
+  "Clear the dashboard search filter (keep exclusions)."
   (interactive)
   (setq tiles--notes-page 0)
   (setq tiles--notes-filter nil)
@@ -1620,7 +1620,8 @@ Shows a dashboard with statistics and note listing."
           (other-window 1))))))
 
 (defun tiles--note-expanded-extra (note-data file)
-  "Return two extra lines: keywords and stats (chars, words, filesize)."
+  "Return two extra lines for NOTE-DATA: keywords and stats.
+FILE is the path to the note file, used to compute filesize."
   (let* ((content (or (plist-get note-data :content) ""))
          (filepath (plist-get note-data :filepath))
          (indent (make-string 20 ?\s))
@@ -1786,7 +1787,7 @@ Respects manual display order set by M-up/M-down."
     (if (not files)
         (message "No notes to stitch")
       (if (or tiles--notes-filter
-              (yes-or-no-p "You should perform a search before stitching notes. Are you sure you want to stitch ALL the notes? "))
+              (yes-or-no-p "You should perform a search before stitching notes.  Are you sure you want to stitch ALL the notes? "))
           (progn
             (tiles-notes-quit)
             (setq tiles--current-search-results files)
