@@ -1,9 +1,9 @@
 ;;; tiles.el --- Tagged Instant Lightweight Emacs Snippets -*- lexical-binding: t; -*-
 
-;; Author: Claudiu Tănăselia
+;; Author: Claudiu Tănăselia <https://www.tanaselia.ro>
 ;; Version: 0.4
 ;; Package-Requires: ((emacs "27.1"))
-;; Keywords: notes, org
+;; Keywords: files, text, convenience
 ;; URL: https://github.com/ctanas/tiles
 
 ;; SPDX-License-Identifier: GPL-3.0-or-later
@@ -294,7 +294,7 @@ TYPE is `tag' or `keyword'.")
 
 (defvar tiles--notes-exclude nil
   "List of tags to exclude from dashboard display and search.
-Set by `F' in the dashboard, cleared by `c'.")
+Set by F in the dashboard, cleared by c.")
 
 (defvar-local tiles--line-target-width 135
   "Computed target width for note lines in the dashboard.
@@ -625,7 +625,6 @@ Set tiles-tag-mode to 'unrestricted or a tag list to enable them.")
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "C-c C-c") #'tiles-capture-save)
     (define-key map (kbd "C-c C-k") #'tiles-capture-cancel)
-    (define-key map (kbd "C-c m t") #'tiles-insert-tag)
     map)
   "Keymap for `tiles-capture-mode'.")
 
@@ -1556,7 +1555,7 @@ Shows a dashboard with statistics and note listing."
   "Return t if any note is currently expanded."
   (save-excursion
     (goto-char (point-min))
-    (not (null (text-property-search-forward 'tiles-expanded)))))
+    (and (text-property-search-forward 'tiles-expanded) t)))
 
 (defun tiles-notes-next ()
   "Move to next note."
@@ -1907,7 +1906,7 @@ Prompts for a new date in YYYY-MM-DD HH:MM or YYYY-MM-DD HH:MM:SS format."
                       (line-end (line-end-position)))
                   (delete-region line-start line-end)
                   (insert (tiles--render-note-line filepath)))
-                (goto-char (line-end-position)))
+                (end-of-line))
               (forward-line 1))))))))
 
 (defun tiles--after-save-hook ()
@@ -2237,12 +2236,11 @@ and :separator (string between notes, default blank line)."
                 (insert "\n")))))))))
 
 ;; Register dblocks for C-c C-x x insertion menu
-(with-eval-after-load 'org
-  (when (boundp 'org-dynamic-block-alist)
-    (add-to-list 'org-dynamic-block-alist
-                 '("tiles-notes" . org-dblock-write:tiles-notes))
-    (add-to-list 'org-dynamic-block-alist
-                 '("tiles-files" . org-dblock-write:tiles-files))))
+(when (boundp 'org-dynamic-block-alist)
+  (add-to-list 'org-dynamic-block-alist
+               '("tiles-notes" . org-dblock-write:tiles-notes))
+  (add-to-list 'org-dynamic-block-alist
+               '("tiles-files" . org-dblock-write:tiles-files)))
 
 ;;; Keybindings
 
