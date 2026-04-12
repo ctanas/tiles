@@ -176,6 +176,7 @@
 
 (require 'org)
 (require 'lunar)
+(require 'face-remap)
 
 (defconst tiles-version "0.4"
   "Current version of TILES.")
@@ -759,8 +760,10 @@ Set tiles-tag-mode to 'unrestricted or a tag list to enable them.")
 
 (defvar-local tiles--focus-saved-margins nil
   "Saved window margins before `tiles-focus-mode' was activated.")
-(defvar-local tiles--focus-overlay nil
-  "Overlay for top padding in `tiles-focus-mode'.")
+(defvar-local tiles--focus-saved-header nil
+  "Saved `header-line-format' before `tiles-focus-mode' was activated.")
+(defvar-local tiles--focus-header-remap nil
+  "Face remap cookie for `header-line' in `tiles-focus-mode'.")
 
 (defun tiles--focus-reapply ()
   "Re-apply focus mode margins to all windows currently displaying this buffer.
@@ -777,7 +780,7 @@ after switching away and back to a focus-mode buffer."
 (define-minor-mode tiles-focus-mode
   "Minor mode for distraction-free note editing.
 Centers the buffer content with approximately 80-character line width
-and adds 2 empty lines at the top for visual breathing room."
+and adds visual breathing room at the top via the header line."
   :lighter " Focus"
   (if tiles-focus-mode
       (let* ((body-width 80)
@@ -790,25 +793,25 @@ and adds 2 empty lines at the top for visual breathing room."
         (setq-local word-wrap t)
         (setq-local truncate-lines nil)
         (visual-line-mode 1)
-        ;; Add 2 empty lines at top via overlay (not in buffer content).
-        ;; Delete any existing overlay first to avoid duplicates on re-entry.
-        (when tiles--focus-overlay
-          (delete-overlay tiles--focus-overlay)
-          (setq tiles--focus-overlay nil))
-        (let ((ov (make-overlay (point-min) (point-min))))
-          (overlay-put ov 'before-string
-                       (propertize "\n\n" 'cursor-intangible t))
-          (setq tiles--focus-overlay ov))
-        (cursor-intangible-mode 1)
-        (goto-char (point-min))
+        ;; Add visual breathing room via header-line: it lives above the buffer
+        ;; content area so cursor positioning in the buffer is unaffected.
+        (setq tiles--focus-saved-header header-line-format)
+        (setq tiles--focus-header-remap
+              (face-remap-add-relative 'header-line
+                :background (face-attribute 'default :background)
+                :foreground (face-attribute 'default :foreground)
+                :box nil :underline nil :overline nil))
+        (setq-local header-line-format
+                    (propertize " " 'display '(space :height 2.0)))
         ;; Re-apply margins whenever this buffer appears in a new window
         (add-hook 'window-configuration-change-hook #'tiles--focus-reapply nil t))
-    ;; Deactivate: restore margins and remove overlay
+    ;; Deactivate: restore margins and header line
     (remove-hook 'window-configuration-change-hook #'tiles--focus-reapply t)
-    (cursor-intangible-mode -1)
-    (when tiles--focus-overlay
-      (delete-overlay tiles--focus-overlay)
-      (setq tiles--focus-overlay nil))
+    (when tiles--focus-header-remap
+      (face-remap-remove-relative tiles--focus-header-remap)
+      (setq tiles--focus-header-remap nil))
+    (setq-local header-line-format tiles--focus-saved-header)
+    (setq tiles--focus-saved-header nil)
     (let ((win (selected-window)))
       (if tiles--focus-saved-margins
           (set-window-margins win (car tiles--focus-saved-margins)
@@ -1617,6 +1620,7 @@ Shows a dashboard with statistics and note listing."
   (let ((filepath (tiles--notes-current-file)))
     (when filepath
       (find-file filepath)
+      (goto-char (point-min))
       (tiles--enable-tag-line-fontification)
       (when tiles-focus-default
         (tiles-focus-mode 1)))))
@@ -2170,6 +2174,7 @@ Prompts for a new date in YYYY-MM-DD HH:MM or YYYY-MM-DD HH:MM:SS format."
         (progn
           (tiles-quit)
           (find-file filepath)
+          (goto-char (point-min))
           (tiles--enable-tag-line-fontification)
           (when tiles-focus-default
             (tiles-focus-mode 1)))
