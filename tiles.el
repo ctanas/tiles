@@ -229,6 +229,13 @@ Uses ═ and ─ instead of = and -.  Set to nil for plain ASCII."
   :type 'boolean
   :group 'tiles)
 
+(defcustom tiles-year-subfolders nil
+  "When non-nil, save new notes in a per-year subfolder inside `tiles-directory'.
+For example, a note created in 2026 is saved to TILES-DIR/2026/.
+Existing notes in any location are always found (loading is always recursive)."
+  :type 'boolean
+  :group 'tiles)
+
 (defcustom tiles-tag-mode 'unrestricted
   "Controls how tags are handled in TILES.
 
@@ -360,6 +367,17 @@ Uses Emacs's built-in lunar phase computation."
   "Ensure `tiles-directory' exists."
   (unless (file-exists-p tiles-directory)
     (make-directory tiles-directory t)))
+
+(defun tiles--note-save-directory ()
+  "Return the directory where new notes should be saved.
+When `tiles-year-subfolders' is non-nil, returns a YYYY subfolder inside
+`tiles-directory', creating it if needed.  Otherwise returns `tiles-directory'."
+  (if tiles-year-subfolders
+      (let ((dir (expand-file-name (format-time-string "%Y") tiles-directory)))
+        (unless (file-exists-p dir)
+          (make-directory dir t))
+        dir)
+    (expand-file-name tiles-directory)))
 
 (defun tiles--generate-timestamp ()
   "Generate a timestamp string for file naming."
@@ -715,13 +733,14 @@ Set tiles-tag-mode to 'unrestricted or a tag list to enable them.")
       (when (bound-and-true-p tiles-focus-mode)
         (tiles-focus-mode -1))
       (tiles--ensure-directory)
-      (let* ((filename (tiles--generate-filename))
-             (filepath (expand-file-name filename tiles-directory)))
+      (let* ((save-dir (tiles--note-save-directory))
+             (filename (tiles--generate-filename))
+             (filepath (expand-file-name filename save-dir)))
         ;; Ensure we don't overwrite
         (while (file-exists-p filepath)
           (sleep-for 0.1)
           (setq filename (tiles--generate-filename))
-          (setq filepath (expand-file-name filename tiles-directory)))
+          (setq filepath (expand-file-name filename save-dir)))
         (write-region content nil filepath)
         (tiles-capture-mode -1)
         (kill-buffer)
@@ -771,7 +790,11 @@ and adds 2 empty lines at the top for visual breathing room."
         (setq-local word-wrap t)
         (setq-local truncate-lines nil)
         (visual-line-mode 1)
-        ;; Add 2 empty lines at top via overlay (not in buffer content)
+        ;; Add 2 empty lines at top via overlay (not in buffer content).
+        ;; Delete any existing overlay first to avoid duplicates on re-entry.
+        (when tiles--focus-overlay
+          (delete-overlay tiles--focus-overlay)
+          (setq tiles--focus-overlay nil))
         (let ((ov (make-overlay (point-min) (point-min))))
           (overlay-put ov 'before-string
                        (propertize "\n\n" 'cursor-intangible t))
@@ -830,13 +853,14 @@ Must be visiting a TILES note file.  Asks for confirmation."
 (defun tiles--quick-save (content tags)
   "Save a note with CONTENT and TAGS (slash-separated string)."
   (tiles--ensure-directory)
-  (let* ((filename (tiles--generate-filename))
-         (filepath (expand-file-name filename tiles-directory))
+  (let* ((save-dir (tiles--note-save-directory))
+         (filename (tiles--generate-filename))
+         (filepath (expand-file-name filename save-dir))
          (note (concat content "\n\n" tags "\n")))
     (while (file-exists-p filepath)
       (sleep-for 0.1)
       (setq filename (tiles--generate-filename))
-      (setq filepath (expand-file-name filename tiles-directory)))
+      (setq filepath (expand-file-name filename save-dir)))
     (write-region note nil filepath)
     (when (get-buffer tiles--notes-buffer-name)
       (tiles-show-notes))
