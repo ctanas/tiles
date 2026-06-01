@@ -637,7 +637,7 @@ Set tiles-tag-mode to 'unrestricted or a tag list to enable them.")
                       (mapconcat #'identity (tiles--tags-required-list) ", ")))
              (t "Tag: ")))
            (tag (completing-read prompt candidates nil require-match)))
-      (when (not (string-empty-p (string-trim tag)))
+      (unless (string-empty-p (string-trim tag))
         (insert tag)))))
 
 (defvar tiles-capture-mode-map
@@ -685,7 +685,7 @@ Set tiles-tag-mode to 'unrestricted or a tag list to enable them.")
     (cond
      ((tiles--tags-inhibited-p)
       ;; Auto-insert placeholder tag when the format is not yet valid
-      (when (not (eq (tiles--validate-note-format content) t))
+      (unless (eq (tiles--validate-note-format content) t)
         (goto-char (point-max))
         (unless (looking-back "\n\n" nil)
           (unless (looking-back "\n" nil) (insert "\n"))
@@ -695,7 +695,7 @@ Set tiles-tag-mode to 'unrestricted or a tag list to enable them.")
      (t
       ;; Prompt for tags if missing
       (let ((valid (tiles--validate-note-format content)))
-        (when (not (eq valid t))
+        (unless (eq valid t)
           (let ((tags (tiles--prompt-for-tags (format "%s. Add tags: " valid))))
             (when (or (null tags) (string-empty-p (string-trim tags)))
               (user-error "Aborted: note needs tags"))
