@@ -178,6 +178,9 @@
 (require 'lunar)
 (require 'face-remap)
 
+(declare-function file-notify-add-watch "filenotify" (file flags callback))
+(declare-function file-notify-rm-watch "filenotify" (descriptor))
+
 (defconst tiles-version "0.4"
   "Current version of TILES.")
 
@@ -237,6 +240,22 @@ Existing notes in any location are always found (loading is always recursive)."
   :type 'boolean
   :group 'tiles)
 
+(defcustom tiles-cache-file
+  (locate-user-emacs-file "tiles-cache.el")
+  "File used to persist the parsed-note cache between Emacs sessions.
+Set to nil to disable persistence; the cache will then be rebuilt on
+demand each session.  Entries are revalidated against file mtime on
+access, so a stale cache file is always safe."
+  :type '(choice file (const :tag "Disabled" nil))
+  :group 'tiles)
+
+(defcustom tiles-watch-files t
+  "When non-nil, use `file-notify' to watch `tiles-directory' for changes.
+Lets TILES detect external edits (e.g. from another Emacs, mobile sync,
+or git pull) and invalidate its caches automatically."
+  :type 'boolean
+  :group 'tiles)
+
 (defcustom tiles-tag-mode 'unrestricted
   "Controls how tags are handled in TILES.
 
@@ -272,6 +291,26 @@ Possible values:
 (defvar tiles--cache (make-hash-table :test 'equal)
   "Cache of parsed note data, keyed by filepath.
 Values are (MTIME . PARSED-DATA).")
+
+(defvar tiles--tag-index (make-hash-table :test 'equal)
+  "Reverse index mapping each tag string to a list of filepaths.")
+
+(defvar tiles--keyword-index (make-hash-table :test 'equal)
+  "Reverse index mapping each normalized keyword to a list of filepaths.")
+
+(defvar tiles--file-index-record (make-hash-table :test 'equal)
+  "Snapshot of the (TAGS . KEYWORDS) indexed for each filepath.
+Used to remove a file cleanly from `tiles--tag-index' and
+`tiles--keyword-index' when it is re-parsed or evicted.")
+
+(defvar tiles--cache-loaded nil
+  "Non-nil after the persistent cache has been loaded this session.")
+
+(defvar tiles--index-complete nil
+  "Non-nil when the reverse index is known to cover every on-disk note.")
+
+(defvar tiles--file-watches nil
+  "Alist of (DIR . DESCRIPTOR) for active `file-notify' watches.")
 
 (defvar tiles-debug nil
   "When non-nil, display performance diagnostics after each dashboard load.
@@ -414,6 +453,7 @@ Results are cached and only re-parsed when the file's mtime changes."
             (setq tiles--debug-cache-misses (1+ tiles--debug-cache-misses)))
           (let ((result (tiles--parse-note-file-uncached filepath)))
             (puthash filepath (cons mtime result) tiles--cache)
+            (tiles--index-record filepath result)
             result))))))
 
 (defun tiles--parse-note-file-uncached (filepath)
@@ -448,10 +488,233 @@ Everything before it (minus the trailing blank separator) is content."
               :filepath filepath)))))
 
 (defun tiles-clear-cache ()
-  "Clear the tiles note cache."
+  "Clear the tiles note cache and reverse index.
+Removes the persistent cache file as well."
   (interactive)
   (clrhash tiles--cache)
+  (clrhash tiles--tag-index)
+  (clrhash tiles--keyword-index)
+  (clrhash tiles--file-index-record)
+  (setq tiles--index-complete nil)
+  (when (and tiles-cache-file (file-exists-p tiles-cache-file))
+    (delete-file tiles-cache-file))
   (message "Tiles cache cleared"))
+
+;;; Reverse index, persistent cache, and file-notify
+
+(defun tiles--index-record (filepath note-data)
+  "Add or refresh FILEPATH's entries in the reverse indices using NOTE-DATA."
+  (tiles--index-forget filepath)
+  (let ((tags (plist-get note-data :tags))
+        (keywords (plist-get note-data :keywords)))
+    (dolist (tag tags)
+      (let ((files (gethash tag tiles--tag-index)))
+        (unless (member filepath files)
+          (puthash tag (cons filepath files) tiles--tag-index))))
+    (dolist (kw keywords)
+      (let ((files (gethash kw tiles--keyword-index)))
+        (unless (member filepath files)
+          (puthash kw (cons filepath files) tiles--keyword-index))))
+    (puthash filepath (cons tags keywords) tiles--file-index-record)))
+
+(defun tiles--index-forget (filepath)
+  "Remove FILEPATH from the tag and keyword indices."
+  (let ((rec (gethash filepath tiles--file-index-record)))
+    (when rec
+      (dolist (tag (car rec))
+        (let ((files (delete filepath (gethash tag tiles--tag-index))))
+          (if files
+              (puthash tag files tiles--tag-index)
+            (remhash tag tiles--tag-index))))
+      (dolist (kw (cdr rec))
+        (let ((files (delete filepath (gethash kw tiles--keyword-index))))
+          (if files
+              (puthash kw files tiles--keyword-index)
+            (remhash kw tiles--keyword-index))))
+      (remhash filepath tiles--file-index-record))))
+
+(defun tiles--evict-file (filepath)
+  "Remove FILEPATH from cache and reverse indices entirely."
+  (tiles--index-forget filepath)
+  (remhash filepath tiles--cache))
+
+(defun tiles--load-disk-cache-once ()
+  "Load the persistent cache from `tiles-cache-file' on the first call.
+Subsequent calls are no-ops.  Entries are revalidated by mtime when first
+accessed, so a stale file is always safe."
+  (unless tiles--cache-loaded
+    (setq tiles--cache-loaded t)
+    (when (and tiles-cache-file (file-exists-p tiles-cache-file))
+      (condition-case err
+          (let* ((data (with-temp-buffer
+                         (insert-file-contents tiles-cache-file)
+                         (read (current-buffer))))
+                 (version (plist-get data :version))
+                 (entries (plist-get data :entries)))
+            (when (eq version 1)
+              (dolist (entry entries)
+                (let* ((file (car entry))
+                       (mtime-and-parsed (cdr entry)))
+                  (when (and (stringp file) (file-exists-p file))
+                    (puthash file mtime-and-parsed tiles--cache)
+                    (tiles--index-record file (cdr mtime-and-parsed)))))))
+        (error
+         (message "Tiles: failed to load cache from %s: %s"
+                  tiles-cache-file (error-message-string err)))))))
+
+(defun tiles--save-disk-cache ()
+  "Persist `tiles--cache' to `tiles-cache-file' if enabled."
+  (when (and tiles-cache-file
+             (> (hash-table-count tiles--cache) 0))
+    (condition-case err
+        (let (entries)
+          (maphash (lambda (file v) (push (cons file v) entries))
+                   tiles--cache)
+          (let ((dir (file-name-directory tiles-cache-file)))
+            (when dir (make-directory dir t)))
+          (with-temp-file tiles-cache-file
+            (let ((print-level nil) (print-length nil))
+              (prin1 (list :version 1 :entries entries) (current-buffer)))))
+      (error
+       (message "Tiles: failed to save cache to %s: %s"
+                tiles-cache-file (error-message-string err))))))
+
+(defun tiles--ensure-index ()
+  "Ensure the reverse index covers all current on-disk notes.
+Loads the persistent cache, parses any uncached files, evicts entries
+whose files have disappeared, and installs `file-notify' watches."
+  (tiles--load-disk-cache-once)
+  (unless tiles--index-complete
+    (let ((files (tiles--get-all-tile-files))
+          (current (make-hash-table :test 'equal)))
+      (dolist (file files)
+        (puthash file t current)
+        (tiles--parse-note-file file))
+      (let (stale)
+        (maphash (lambda (file _)
+                   (unless (gethash file current)
+                     (push file stale)))
+                 tiles--cache)
+        (dolist (file stale)
+          (tiles--evict-file file)))
+      (setq tiles--index-complete t)
+      (when tiles-watch-files
+        (tiles--start-file-watch)))))
+
+(defun tiles--files-with-tag-substring (qtag)
+  "Return files whose tags contain QTAG as a substring."
+  (let (out)
+    (maphash (lambda (tag files)
+               (when (string-match-p (regexp-quote qtag) tag)
+                 (setq out (append files out))))
+             tiles--tag-index)
+    (delete-dups out)))
+
+(defun tiles--files-with-keyword-substring (qkw)
+  "Return files whose keywords contain QKW (normalized) as a substring."
+  (let ((normalized (tiles--normalize-keyword qkw))
+        out)
+    (maphash (lambda (kw files)
+               (when (string-match-p (regexp-quote normalized) kw)
+                 (setq out (append files out))))
+             tiles--keyword-index)
+    (delete-dups out)))
+
+(defun tiles--files-matching-tag-query (query-and-groups)
+  "Return files matching tag QUERY-AND-GROUPS via the reverse index.
+AND within each group, OR across groups."
+  (tiles--ensure-index)
+  (let (result)
+    (dolist (and-group query-and-groups)
+      (when and-group
+        (let ((files (tiles--files-with-tag-substring (car and-group))))
+          (dolist (qtag (cdr and-group))
+            (setq files (seq-intersection
+                         files
+                         (tiles--files-with-tag-substring qtag)
+                         #'equal)))
+          (setq result (append files result)))))
+    (delete-dups result)))
+
+(defun tiles--files-matching-keyword-query (query-keywords)
+  "Return files matching any of QUERY-KEYWORDS via the reverse index."
+  (tiles--ensure-index)
+  (let (out)
+    (dolist (kw query-keywords)
+      (setq out (append (tiles--files-with-keyword-substring kw) out)))
+    (delete-dups out)))
+
+(defun tiles--sort-newest-first (files)
+  "Return FILES sorted by filename descending (newest first)."
+  (sort (copy-sequence files)
+        (lambda (a b)
+          (string> (file-name-nondirectory a)
+                   (file-name-nondirectory b)))))
+
+(defun tiles--watched-directories ()
+  "Return the list of directories that should be watched for changes."
+  (let ((root (expand-file-name tiles-directory))
+        dirs)
+    (when (file-exists-p root)
+      (push root dirs)
+      (dolist (file (tiles--get-all-tile-files))
+        (let ((dir (directory-file-name (file-name-directory file))))
+          (unless (member dir dirs)
+            (push dir dirs)))))
+    dirs))
+
+(defun tiles--start-file-watch ()
+  "Install `file-notify' watches for all current note directories.
+Replaces any watches installed by a previous call."
+  (when (require 'filenotify nil t)
+    (tiles--stop-file-watch)
+    (dolist (dir (tiles--watched-directories))
+      (condition-case nil
+          (let ((desc (file-notify-add-watch
+                       dir '(change attribute-change)
+                       #'tiles--handle-file-event)))
+            (push (cons dir desc) tiles--file-watches))
+        (file-notify-error nil)))))
+
+(defun tiles--stop-file-watch ()
+  "Remove all active `file-notify' watches."
+  (dolist (entry tiles--file-watches)
+    (ignore-errors (file-notify-rm-watch (cdr entry))))
+  (setq tiles--file-watches nil))
+
+(defun tiles--tile-file-p (path)
+  "Return non-nil if PATH names a TILES note file."
+  (and (stringp path)
+       (string-match-p "T[0-9]\\{14\\}\\.org\\'" path)))
+
+(defun tiles--handle-file-event (event)
+  "React to a `file-notify' EVENT touching a tile file."
+  (let ((action (nth 1 event))
+        (file (nth 2 event))
+        (file2 (nth 3 event)))
+    (cond
+     ((eq action 'deleted)
+      (when (tiles--tile-file-p file)
+        (tiles--evict-file file)))
+     ((eq action 'renamed)
+      (when (tiles--tile-file-p file)
+        (tiles--evict-file file))
+      (when (tiles--tile-file-p file2)
+        (remhash file2 tiles--cache)
+        (when (file-exists-p file2)
+          (tiles--parse-note-file file2))))
+     ((memq action '(changed attribute-changed))
+      (when (tiles--tile-file-p file)
+        (remhash file tiles--cache)))
+     ((eq action 'created)
+      (cond
+       ((tiles--tile-file-p file)
+        (when (file-exists-p file)
+          (tiles--parse-note-file file)))
+       ((and file (file-directory-p file))
+        (setq tiles--index-complete nil)))))))
+
+(add-hook 'kill-emacs-hook #'tiles--save-disk-cache)
 
 (defun tiles--private-paragraph-p (paragraph)
   "Return non-nil if PARAGRAPH start with &&."
@@ -842,7 +1105,7 @@ Must be visiting a TILES note file.  Asks for confirmation."
         (when (buffer-modified-p)
           (save-buffer))
         (rename-file filepath new-filepath)
-        (remhash filepath tiles--cache)
+        (tiles--evict-file filepath)
         (set-visited-file-name new-filepath t t)
         ;; Update preview in dashboard if open
         (when (equal tiles--preview-file filepath)
@@ -919,13 +1182,8 @@ QUERY uses / for AND and space for OR.
                          (tiles--tags-required-list) nil nil))
                        (t (read-string "Search tags: ")))))
   (let* ((query-tags (tiles--parse-tag-query query))
-         (files (tiles--get-all-tile-files))
-         (results nil))
-    (dolist (file files)
-      (let ((note-data (tiles--parse-note-file file)))
-        (when (and note-data (tiles--note-matches-tag-p note-data query-tags))
-          (push file results))))
-    (setq results (nreverse results))
+         (results (tiles--sort-newest-first
+                   (tiles--files-matching-tag-query query-tags))))
     (setq tiles--current-search-results results)
     (setq tiles--current-search-query query)
     (setq tiles--current-search-type 'tag)
@@ -939,13 +1197,8 @@ QUERY uses / for AND and space for OR.
 QUERY is a space-separated list of keywords (OR logic)."
   (interactive "sSearch keywords: ")
   (let* ((query-keywords (split-string query " " t))
-         (files (tiles--get-all-tile-files))
-         (results nil))
-    (dolist (file files)
-      (let ((note-data (tiles--parse-note-file file)))
-        (when (and note-data (tiles--note-matches-keyword-p note-data query-keywords))
-          (push file results))))
-    (setq results (nreverse results))
+         (results (tiles--sort-newest-first
+                   (tiles--files-matching-keyword-query query-keywords))))
     (setq tiles--current-search-results results)
     (setq tiles--current-search-query query)
     (setq tiles--current-search-type 'keyword)
@@ -1090,7 +1343,8 @@ Only works in keyword lists, not tag lists."
                      (tiles--normalize-keyword item))
         (user-error "New name is the same as the old name"))
       (let ((count 0))
-        (dolist (file (tiles--get-all-tile-files))
+        (tiles--ensure-index)
+        (dolist (file (copy-sequence (gethash item tiles--keyword-index)))
           (let* ((note-data (tiles--parse-note-file file))
                  (keywords (plist-get note-data :keywords)))
             (when (member item keywords)
@@ -1107,6 +1361,7 @@ Only works in keyword lists, not tag lists."
                   (when modified
                     (write-region (point-min) (point-max) file nil 'silent)
                     (remhash file tiles--cache)
+                    (tiles--parse-note-file file)
                     (setq count (1+ count))))))))
         (message "Renamed \"%s\" to \"%s\" in %d file%s"
                  item new-name count (if (= count 1) "" "s"))
@@ -1119,15 +1374,15 @@ Only works in keyword lists, not tag lists."
 (defun tiles--list-collect-data ()
   "Collect tag and keyword counts from all notes.
 Returns (tags-hash . keywords-hash) where values are counts."
+  (tiles--ensure-index)
   (let ((all-tags (make-hash-table :test 'equal))
         (all-keywords (make-hash-table :test 'equal)))
-    (dolist (file (tiles--get-all-tile-files))
-      (let ((note-data (tiles--parse-note-file file)))
-        (when note-data
-          (dolist (tag (plist-get note-data :tags))
-            (puthash tag (1+ (gethash tag all-tags 0)) all-tags))
-          (dolist (kw (plist-get note-data :keywords))
-            (puthash kw (1+ (gethash kw all-keywords 0)) all-keywords)))))
+    (maphash (lambda (tag files)
+               (puthash tag (length files) all-tags))
+             tiles--tag-index)
+    (maphash (lambda (kw files)
+               (puthash kw (length files) all-keywords))
+             tiles--keyword-index)
     (cons all-tags all-keywords)))
 
 ;;;###autoload
@@ -1410,7 +1665,7 @@ QUERY is a space-separated list of tags to exclude."
             (when buf (kill-buffer buf))
             (setq tiles--preview-file nil)))
         (rename-file filepath new-filepath)
-        (remhash filepath tiles--cache)
+        (tiles--evict-file filepath)
         (tiles-show-notes)
         (message "Renamed %s -> %s" old-name new-name)))))
 
@@ -1437,16 +1692,15 @@ QUERY is a space-separated list of tags to exclude."
 
 (defun tiles--apply-exclude (files)
   "Remove from FILES any notes that have excluded tags.
-Uses `tiles--notes-exclude'."
+Uses `tiles--notes-exclude' and the reverse index."
   (if (not tiles--notes-exclude)
       files
-    (seq-remove (lambda (file)
-                  (let* ((note-data (tiles--parse-note-file file))
-                         (tags (when note-data (plist-get note-data :tags))))
-                    (seq-some (lambda (etag)
-                                (member etag tags))
-                              tiles--notes-exclude)))
-                files)))
+    (tiles--ensure-index)
+    (let ((excluded (make-hash-table :test 'equal)))
+      (dolist (etag tiles--notes-exclude)
+        (dolist (f (gethash etag tiles--tag-index))
+          (puthash f t excluded)))
+      (seq-remove (lambda (f) (gethash f excluded)) files))))
 
 (defun tiles--apply-filter (files)
   "Filter FILES according to `tiles--notes-filter' and `tiles--notes-exclude'."
@@ -1455,16 +1709,14 @@ Uses `tiles--notes-exclude'."
         result
       (let* ((type (car tiles--notes-filter))
              (query (cdr tiles--notes-filter))
-             (query-parts (if (eq type 'tag)
-                              (tiles--parse-tag-query query)
-                            (split-string query " " t)))
-             (match-fn (if (eq type 'tag)
-                           #'tiles--note-matches-tag-p
-                         #'tiles--note-matches-keyword-p)))
-        (seq-filter (lambda (file)
-                      (let ((note-data (tiles--parse-note-file file)))
-                        (and note-data (funcall match-fn note-data query-parts))))
-                    result)))))
+             (matching (if (eq type 'tag)
+                           (tiles--files-matching-tag-query
+                            (tiles--parse-tag-query query))
+                         (tiles--files-matching-keyword-query
+                          (split-string query " " t))))
+             (match-set (make-hash-table :test 'equal)))
+        (dolist (f matching) (puthash f t match-set))
+        (seq-filter (lambda (f) (gethash f match-set)) result)))))
 
 ;;;###autoload
 (defun tiles-show-notes ()
@@ -1852,7 +2104,7 @@ Prompts for a new date in YYYY-MM-DD HH:MM or YYYY-MM-DD HH:MM:SS format."
               (when buf (kill-buffer buf))
               (setq tiles--preview-file nil)))
           (rename-file filepath new-filepath)
-          (remhash filepath tiles--cache)
+          (tiles--evict-file filepath)
           ;; Refresh the dashboard
           (tiles-show-notes))))))
 
@@ -1882,7 +2134,7 @@ Prompts for a new date in YYYY-MM-DD HH:MM or YYYY-MM-DD HH:MM:SS format."
             (when buf (kill-buffer buf))
             (setq tiles--preview-file nil)))
         (delete-file filepath)
-        (remhash filepath tiles--cache)
+        (tiles--evict-file filepath)
         (tiles-show-notes)))))
 
 (defun tiles--render-note-line (file)
