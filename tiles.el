@@ -1,7 +1,7 @@
 ;;; tiles.el --- Tagged Instant Lightweight Emacs Snippets -*- lexical-binding: t; -*-
 
 ;; Author: Claudiu Tănăselia <https://www.tanaselia.ro>
-;; Version: 0.4
+;; Version: 0.5
 ;; Package-Requires: ((emacs "27.1"))
 ;; Keywords: files, text, convenience
 ;; URL: https://github.com/ctanas/tiles
@@ -148,6 +148,9 @@
 ;;
 ;; Changelog:
 ;;
+;;   0.5   - Persistent on-disk cache (tiles-cache-file), reverse tag and
+;;           keyword indices for O(matching) search and dashboard filter,
+;;           file-notify watch (tiles-watch-files) to catch external edits.
 ;;   0.4   - First MELPA release;
 ;;   0.3.5 - Tag mode control: tiles-tag-mode can be `unrestricted' (default),
 ;;           `inhibit' (no tags, tag search/filter disabled), a list of allowed
@@ -181,7 +184,7 @@
 (declare-function file-notify-add-watch "filenotify" (file flags callback))
 (declare-function file-notify-rm-watch "filenotify" (descriptor))
 
-(defconst tiles-version "0.4"
+(defconst tiles-version "0.5"
   "Current version of TILES.")
 
 ;;; Customization
