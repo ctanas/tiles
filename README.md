@@ -115,7 +115,7 @@ All commands are under the `C-c m` prefix:
 `C-c m m` launches the dashboard, which displays a chronological list of all notes. Each entry shows color-coded timestamps (showing hours and minutes to save space), inline previews, tags, and keywords. Timestamps are color-coded: green for today, darker green for recent (< 2 weeks), faded grey for older notes. The selection highlight is Lufthansa yellow. While the dashboard displays truncated timestamps for brevity, the actual filenames include timestamps down to the second level, allowing you to create multiple notes within the same minute without conflicts.
 
 ```
-  *T*agged *I*nstant *L*ightweight *E*macs *S*nippets (TILES), v0.3.5 | 42 notes | loaded in 0.023s
+  *T*agged *I*nstant *L*ightweight *E*macs *S*nippets (TILES), v0.5.1 | 42 notes | loaded in 0.023s
   ════════════════════════════════════════════════════════════════════════
   [SPC] view, [RET] open, [TAB] expand, [f] format, [d] chg date, [u] touch, [0] stitch, [D] delete, [g] refresh, [+] more, [q] quit
   [t] filter tag, [k] filter keyword, [F] exclude tags, [T] list tags, [K] list keywords, [c] clr search, [C] clr excl, [l] new tile
@@ -133,6 +133,7 @@ Dashboard keybindings:
 | `n/p`     | Navigate notes                                |
 | `SPC`     | Open editable preview split (follows cursor)  |
 | `RET`     | Open note file                                |
+| `M-RET`   | Open note file read-only                      |
 | `TAB`     | Toggle expanded view (private &&, keywords, stats) |
 | `M-up`    | Move selected note up                         |
 | `M-down`  | Move selected note down                       |
@@ -259,6 +260,19 @@ To disable focus mode by default:
 (setq tiles-focus-default nil)
 ```
 
+### Similar notes (read-only view)
+
+Open a note read-only with `M-RET` from the dashboard. In a read-only tile buffer:
+
+| Key | Action                                                  |
+|-----|---------------------------------------------------------|
+| `m` | Toggle a list of the most similar notes at end of buffer |
+| `q` | Close the read-only buffer                              |
+
+Similarity is scored with TF-IDF over shared content tokens. Tokens that are `*bold*` in the current note (i.e. its keywords) get a `tiles-similar-keyword-weight` boost (default `3.0`), so they dominate ranking — but plain content overlap is enough to surface a match on its own. Common words self-downweight via IDF; no stopword list is needed.
+
+The number of results shown is controlled by `tiles-similar-count` (default `5`). Press `m` again to hide the block. Each result is rendered as its content followed by a blank line; the original note's tag line keeps its red color, the appended candidates do not.
+
 ### Updating a note's timestamp
 
 While editing a note, `M-x tiles-touch` updates the file's timestamp to the current time and renames the file accordingly. Asks for confirmation before proceeding. Useful for bumping a note to the top of the chronological list after editing.
@@ -302,7 +316,13 @@ Second matching note content...
 
 ## Performance
 
-TILES uses an in-memory cache that stores parsed note data keyed by filepath. Files are only re-read from disk when their modification time changes. The first load reads all files; subsequent operations are fast. Use `M-x tiles-clear-cache` to force a full reload.
+TILES uses an in-memory cache that stores parsed note data keyed by filepath. Files are only re-read from disk when their modification time changes. The cache is persisted to `tiles-cache-file` (default: `~/.emacs.d/tiles-cache.el`) between sessions, so warmup is a one-time cost; entries are still revalidated against file mtime on access, so a stale cache file is always safe. Set `tiles-cache-file` to `nil` to disable persistence.
+
+A reverse index (tag → files, keyword → files) is populated alongside the parsed-note cache, so tag/keyword search, dashboard filtering, and the tag/keyword lists run in O(matching files) rather than O(all files).
+
+When `tiles-watch-files` is non-nil (default), TILES uses Emacs' built-in `file-notify` to watch `tiles-directory` for external changes (another Emacs instance, mobile sync, `git pull`, etc.) and invalidates affected cache and index entries automatically.
+
+Use `M-x tiles-clear-cache` to force a full reload (also wipes the persistent cache file).
 
 ## Customization
 
@@ -319,6 +339,9 @@ All settings are available via `M-x customize-group RET tiles`.
 | `tiles-dashboard-limit`| Max notes per page (`nil` = unlimited)   | `50`                 |
 | `tiles-focus-default`  | Enable focus mode for new notes          | `t`                  |
 | `tiles-fancy-separators` | Use Unicode box-drawing separators (═/─) | `t`                |
+| `tiles-year-subfolders`| Save new notes in a `YYYY/` subfolder    | `nil`                |
+| `tiles-cache-file`     | Path for the persistent cache (`nil` to disable) | `~/.emacs.d/tiles-cache.el` |
+| `tiles-watch-files`    | Watch `tiles-directory` via `file-notify` | `t`                 |
 | `tiles-tag-mode`       | Controls tag behavior (see below)        | `'unrestricted`      |
 
 ### Tag mode
@@ -395,6 +418,9 @@ Example:
 
 ## Changelog
 
+- **0.5.1** — Similar notes: press `m` in a read-only tile buffer (`M-RET` from the dashboard) to list the top `tiles-similar-count` notes most similar to it. Scoring is TF-IDF over shared content tokens, with bold `*keywords*` boosted by `tiles-similar-keyword-weight`. `q` closes the read-only buffer.
+- **0.5** — Persistent on-disk cache (`tiles-cache-file`, mtime-validated, disable by setting to `nil`) so warmup is a one-time cost across sessions. Reverse index (tag → files, keyword → files) speeds up tag/keyword search, dashboard filter, and the tag/keyword lists from O(all files) to O(matching files). `file-notify` watches (`tiles-watch-files`, default `t`) catch external edits (other Emacs instances, mobile sync, `git pull`). New `tiles-year-subfolders` option to save new notes in a `YYYY/` subfolder (loading remains recursive, so existing notes in any layout are still found). Focus-mode fixes: cursor positioning now uses the header line for top padding (no more stray padding lines saved to file), and the focus-mode overlay no longer duplicates when revisiting a note.
+- **0.4** — MELPA-compliance pass: removed load-time `global-set-key` (bindings now applied via a keymap), addressed `package-lint`, `checkdoc`, and byte-compile warnings. New `tiles-insert-tag` command (`C-c m t` inside a capture buffer) inserts a tag at point using completion driven by `tiles-tag-mode`. New `required-one-of` tag mode (`(required-one-of TAG...)`): any tags are accepted, but at least one from the list must be present. Fix: focus mode no longer leaves stale state on save.
 - **0.3.5** — Tag mode control via `tiles-tag-mode`: `'unrestricted` (default), `'inhibit` (tags disabled, tag search/filter suppressed), a list of allowed tag strings (completion-based prompts, first element is the default), or `(required-one-of TAG...)` (any tags accepted, but at least one from the list must be present). Fix: deleting the last note now correctly refreshes the dashboard to an empty state instead of leaving the deleted note visible.
 - **0.3.4** — Keyword rename: `R` in the keyword list renames a keyword across all note files.
 - **0.3.3** — Unicode box-drawing dashboard separators (`tiles-fancy-separators`, set to `nil` for ASCII fallback). Tag line shown in red (`tiles-tags` face) when editing notes. Focus mode when opening notes from stitched view (`RET`).

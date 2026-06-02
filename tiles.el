@@ -1,7 +1,7 @@
 ;;; tiles.el --- Tagged Instant Lightweight Emacs Snippets -*- lexical-binding: t; -*-
 
 ;; Author: Claudiu Tănăselia <https://www.tanaselia.ro>
-;; Version: 0.5
+;; Version: 0.5.1
 ;; Package-Requires: ((emacs "27.1"))
 ;; Keywords: files, text, convenience
 ;; URL: https://github.com/ctanas/tiles
@@ -73,6 +73,7 @@
 ;;   n/p       - Navigate notes
 ;;   SPC       - Open editable preview split (updates on navigation)
 ;;   RET       - Open note file
+;;   M-RET     - Open note file read-only
 ;;   TAB       - Toggle expanded view (private &&, keywords, stats)
 ;;   M-up/down - Reorder notes
 ;;   d         - Change note date/timestamp
@@ -148,6 +149,10 @@
 ;;
 ;; Changelog:
 ;;
+;;   0.5.1 - Similar notes: press m in a read-only tile to list the top
+;;           tiles-similar-count notes most similar to it (TF-IDF over
+;;           shared content tokens, bold *keywords* boosted). q closes
+;;           the read-only buffer.
 ;;   0.5   - Persistent on-disk cache (tiles-cache-file), reverse tag and
 ;;           keyword indices for O(matching) search and dashboard filter,
 ;;           file-notify watch (tiles-watch-files) to catch external edits.
@@ -184,7 +189,7 @@
 (declare-function file-notify-add-watch "filenotify" (file flags callback))
 (declare-function file-notify-rm-watch "filenotify" (descriptor))
 
-(defconst tiles-version "0.5"
+(defconst tiles-version "0.5.1"
   "Current version of TILES.")
 
 ;;; Customization
@@ -305,6 +310,9 @@ Values are (MTIME . PARSED-DATA).")
   "Snapshot of the (TAGS . KEYWORDS) indexed for each filepath.
 Used to remove a file cleanly from `tiles--tag-index' and
 `tiles--keyword-index' when it is re-parsed or evicted.")
+
+(defvar tiles--content-token-cache (make-hash-table :test 'equal)
+  "Cache of (MTIME . TOKEN-LIST) per filepath for content-token similarity.")
 
 (defvar tiles--cache-loaded nil
   "Non-nil after the persistent cache has been loaded this session.")
@@ -498,6 +506,7 @@ Removes the persistent cache file as well."
   (clrhash tiles--tag-index)
   (clrhash tiles--keyword-index)
   (clrhash tiles--file-index-record)
+  (clrhash tiles--content-token-cache)
   (setq tiles--index-complete nil)
   (when (and tiles-cache-file (file-exists-p tiles-cache-file))
     (delete-file tiles-cache-file))
@@ -811,13 +820,18 @@ Checks that the last non-empty line is a tag line preceded by a blank line."
 
 ;;; Tag-line fontification
 
+(defvar tiles--similar-region-start)
+
 (defun tiles--tag-line-matcher (limit)
   "Font-lock matcher for the tag line (last non-empty line) in a tiles note.
 Only matches when preceded by a blank line, per the TILES note format.
 Searches up to LIMIT.  Returns non-nil and sets match data if found."
-  (let ((tag-line-pos nil))
+  (let ((tag-line-pos nil)
+        (search-end (or (and (markerp tiles--similar-region-start)
+                             (marker-position tiles--similar-region-start))
+                        (point-max))))
     (save-excursion
-      (goto-char (point-max))
+      (goto-char search-end)
       (skip-chars-backward " \t\n")
       (beginning-of-line)
       (when (and (<= (point) limit)
@@ -1435,6 +1449,7 @@ Press RET to filter the dashboard by the selected keyword."
     (define-key map (kbd "<down>") #'tiles-notes-next)
     (define-key map (kbd "<up>") #'tiles-notes-prev)
     (define-key map (kbd "RET") #'tiles-notes-open)
+    (define-key map (kbd "<M-return>") #'tiles-notes-open-read-only)
     (define-key map (kbd "SPC") #'tiles-notes-preview)
     (define-key map (kbd "t") #'tiles-notes-filter-tag)
     (define-key map (kbd "k") #'tiles-notes-filter-keyword)
@@ -1768,7 +1783,7 @@ Shows a dashboard with statistics and note listing."
           (let* ((load-time (- (float-time) start-time))
                  (title (format "  *T*agged *I*nstant *L*ightweight *E*macs *S*nippets (TILES), v%s | %d notes | loaded in %.3fs\n"
                                 tiles-version num-all load-time))
-                 (keys (concat "  [SPC] view, [RET] open, [TAB] expand, [f] format, [d] chg date, [u] touch, [0] stitch, [D] delete, [g] refresh, [+] more, [q] quit\n"
+                 (keys (concat "  [SPC] view, [RET] open, [M-RET] read-only, [TAB] expand, [f] format, [d] chg date, [u] touch, [0] stitch, [D] delete, [g] refresh, [+] more, [q] quit\n"
                                (if (tiles--tags-inhibited-p)
                                    "  [k] filter keyword, [K] list keywords, [c] clr search, [l] new tile\n"
                                  "  [t] filter tag, [k] filter keyword, [F] exclude tags, [T] list tags, [K] list keywords, [c] clr search, [C] clr excl, [l] new tile\n")))
@@ -1877,6 +1892,19 @@ Shows a dashboard with statistics and note listing."
       (find-file filepath)
       (goto-char (point-min))
       (tiles--enable-tag-line-fontification)
+      (when tiles-focus-default
+        (tiles-focus-mode 1)))))
+
+(defun tiles-notes-open-read-only ()
+  "Open the note on the current line in a read-only buffer.
+Activates `tiles-readonly-mode' so `m' shows similar notes."
+  (interactive)
+  (let ((filepath (tiles--notes-current-file)))
+    (when filepath
+      (find-file-read-only filepath)
+      (goto-char (point-min))
+      (tiles--enable-tag-line-fontification)
+      (tiles-readonly-mode 1)
       (when tiles-focus-default
         (tiles-focus-mode 1)))))
 
@@ -2215,6 +2243,169 @@ Prompts for a new date in YYYY-MM-DD HH:MM or YYYY-MM-DD HH:MM:SS format."
       (when win (delete-window win)))
     (setq tiles--preview-file nil))
   (delete-other-windows))
+
+;;; Similar Notes
+
+(defcustom tiles-similar-count 5
+  "Number of similar notes shown by `tiles-show-similar'."
+  :type 'integer
+  :group 'tiles)
+
+(defcustom tiles-similar-keyword-weight 3.0
+  "Score multiplier for shared tokens that are also `*bold*' in the target."
+  :type 'number
+  :group 'tiles)
+
+(defcustom tiles-similar-min-token-length 3
+  "Minimum length of a content token considered for similarity scoring."
+  :type 'integer
+  :group 'tiles)
+
+(defvar-local tiles--similar-region-start nil
+  "Start marker of the inserted similar-notes block, or nil if hidden.")
+
+(defvar-local tiles--similar-region-end nil
+  "End marker of the inserted similar-notes block, or nil if hidden.")
+
+(defun tiles--tokenize-content (content)
+  "Return a deduplicated list of lowercase tokens from CONTENT.
+Strips org markup, splits on non-alphanumerics, and drops tokens
+shorter than `tiles-similar-min-token-length'."
+  (let ((text (downcase (tiles--strip-org-markup (or content ""))))
+        tokens)
+    (dolist (w (split-string text "[^[:alnum:]]+" t))
+      (when (>= (length w) tiles-similar-min-token-length)
+        (push w tokens)))
+    (delete-dups tokens)))
+
+(defun tiles--file-content-tokens (filepath)
+  "Return content tokens for FILEPATH, cached by mtime."
+  (let* ((mtime (file-attribute-modification-time
+                 (file-attributes filepath)))
+         (cached (gethash filepath tiles--content-token-cache)))
+    (if (and cached (equal (car cached) mtime))
+        (cdr cached)
+      (let* ((data (tiles--parse-note-file filepath))
+             (content (tiles--strip-private-paragraphs
+                       (or (plist-get data :content) "")))
+             (tokens (tiles--tokenize-content content)))
+        (puthash filepath (cons mtime tokens) tiles--content-token-cache)
+        tokens))))
+
+(defun tiles--similar-notes (filepath)
+  "Return up to `tiles-similar-count' files most similar to FILEPATH.
+Scoring is TF-IDF over content tokens; tokens that are bold keywords
+in the target get a `tiles-similar-keyword-weight' boost.
+Each element is (SCORE . OTHER-FILEPATH), highest score first."
+  (tiles--ensure-index)
+  (let* ((target-tokens (tiles--file-content-tokens filepath))
+         (target-kw-set (make-hash-table :test 'equal))
+         (df (make-hash-table :test 'equal))
+         (n (max 1 (hash-table-count tiles--file-index-record)))
+         scored)
+    (dolist (kw (plist-get (tiles--parse-note-file filepath) :keywords))
+      (dolist (w (split-string (downcase kw) "[^[:alnum:]]+" t))
+        (when (>= (length w) tiles-similar-min-token-length)
+          (puthash w t target-kw-set))))
+    (maphash
+     (lambda (f _)
+       (dolist (tok (tiles--file-content-tokens f))
+         (when (member tok target-tokens)
+           (puthash tok (1+ (gethash tok df 0)) df))))
+     tiles--file-index-record)
+    (maphash
+     (lambda (f _)
+       (unless (equal f filepath)
+         (let ((score 0.0))
+           (dolist (tok (tiles--file-content-tokens f))
+             (when (member tok target-tokens)
+               (let* ((d (gethash tok df 0))
+                      (idf (log (/ (+ n 1.0) (+ d 1.0))))
+                      (boost (if (gethash tok target-kw-set)
+                                 tiles-similar-keyword-weight
+                               1.0)))
+                 (setq score (+ score (* boost idf))))))
+           (when (> score 0)
+             (push (cons score f) scored)))))
+     tiles--file-index-record)
+    (setq scored (sort scored (lambda (a b) (> (car a) (car b)))))
+    (seq-take scored tiles-similar-count)))
+
+(defun tiles--similar-clear ()
+  "Remove the inserted similar-notes block from the current buffer."
+  (when (and tiles--similar-region-start tiles--similar-region-end)
+    (let ((inhibit-read-only t)
+          (was-modified (buffer-modified-p)))
+      (delete-region tiles--similar-region-start tiles--similar-region-end)
+      (set-marker tiles--similar-region-start nil)
+      (set-marker tiles--similar-region-end nil)
+      (setq tiles--similar-region-start nil
+            tiles--similar-region-end nil)
+      (set-buffer-modified-p was-modified)
+      (when font-lock-mode (font-lock-flush)))))
+
+(defun tiles--similar-insert (filepath)
+  "Append the top similar notes for FILEPATH to the current buffer.
+Returns the number of notes inserted, or nil when none were found."
+  (let ((matches (tiles--similar-notes filepath)))
+    (when matches
+      (let ((was-modified (buffer-modified-p))
+            (inhibit-read-only t))
+        (save-excursion
+          (goto-char (point-max))
+          (unless (bolp) (insert "\n"))
+          (insert "\n")
+          (setq tiles--similar-region-start (point-marker))
+          (set-marker-insertion-type tiles--similar-region-start nil)
+          (dolist (m matches)
+            (let* ((f (cdr m))
+                   (data (tiles--parse-note-file f))
+                   (content (string-trim
+                             (or (tiles--strip-private-paragraphs
+                                  (plist-get data :content))
+                                 ""))))
+              (insert content "\n\n")))
+          (setq tiles--similar-region-end (point-marker))
+          (set-marker-insertion-type tiles--similar-region-end t))
+        (set-buffer-modified-p was-modified)
+        (when font-lock-mode (font-lock-flush))
+        (length matches)))))
+
+(defun tiles-show-similar ()
+  "Toggle a block of notes similar to the current tile at end of buffer.
+Scores notes by TF-IDF over shared content tokens; tokens that are
+`*bold*' in the current note get a `tiles-similar-keyword-weight'
+boost.  Press \\[tiles-show-similar] again to remove the block."
+  (interactive)
+  (let ((filepath (buffer-file-name)))
+    (unless (and filepath (tiles--tile-file-p filepath))
+      (user-error "Not visiting a tile file"))
+    (if (and tiles--similar-region-start tiles--similar-region-end)
+        (progn (tiles--similar-clear)
+               (message "Similar notes hidden."))
+      (let ((n (tiles--similar-insert filepath)))
+        (if n
+            (message "Showing %d similar %s."
+                     n (if (= 1 n) "note" "notes"))
+          (message "No similar notes found."))))))
+
+(defun tiles-readonly-quit ()
+  "Bury the current read-only tile buffer and delete its window."
+  (interactive)
+  (quit-window t))
+
+(defvar tiles-readonly-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "m") #'tiles-show-similar)
+    (define-key map (kbd "q") #'tiles-readonly-quit)
+    map)
+  "Keymap for `tiles-readonly-mode'.")
+
+(define-minor-mode tiles-readonly-mode
+  "Minor mode for read-only TILES note buffers.
+Press \\<tiles-readonly-mode-map>\\[tiles-show-similar] to list notes similar to the current tile."
+  :lighter " Tile-RO"
+  :keymap tiles-readonly-mode-map)
 
 ;;; Search View Mode (Two-Panel)
 
