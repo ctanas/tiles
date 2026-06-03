@@ -1,7 +1,7 @@
 ;;; tiles.el --- Tagged Instant Lightweight Emacs Snippets -*- lexical-binding: t; -*-
 
 ;; Author: Claudiu Tănăselia <https://www.tanaselia.ro>
-;; Version: 0.5.1
+;; Version: 0.5.2
 ;; Package-Requires: ((emacs "27.1"))
 ;; Keywords: files, text, convenience
 ;; URL: https://github.com/ctanas/tiles
@@ -46,7 +46,7 @@
 ;;   tag/keyword filtering, tag exclusion, and date editing
 ;; - Moon phase in dashboard status line (days until next New/Full Moon)
 ;; - Tag search with AND/OR logic (/ = AND, space = OR)
-;; - Keyword search with OR logic (space-separated terms)
+;; - Keyword search with AND/OR/NOT (/ = AND, space = OR, ! = NOT)
 ;; - Two-panel search view with live preview
 ;; - Stitched view: search results as flowing text
 ;; - Quick capture via minibuffer (tiles-quick, tiles-yank)
@@ -118,8 +118,12 @@
 ;;   Example: "b218/lx2026 misc" = (b218 AND lx2026) OR misc
 ;;
 ;; Keyword search syntax:
-;;   space     - OR (any term matches)
+;;   /         - AND (all terms in group must match)
+;;   space     - OR (any group matches)
+;;   !prefix   - NOT (term must NOT match)
 ;;   Example: "emacs Lisp" = Emacs OR Lisp
+;;   Example: "emacs/Lisp" = Emacs AND Lisp
+;;   Example: "emacs/!Lisp" = Emacs but not Lisp
 ;;
 ;; Other commands (M-x):
 ;;   tiles-touch       - Update a note's timestamp to now (renames file)
@@ -149,6 +153,15 @@
 ;;
 ;; Changelog:
 ;;
+;;   0.5.2 - Keyword search now supports AND (/) and NOT (!) alongside the
+;;           existing space-as-OR.  Tag rename: R in the tag list renames a
+;;           tag across all notes (parallel to keyword rename).  New
+;;           dashboard key w copies the selected note (private && stripped)
+;;           to the kill ring.  HTML anchor in tiles-files dblocks is now
+;;           opt-in via tiles-dblock-html-anchor, with per-tag suppression
+;;           via tiles-dblock-no-anchor-tags.  Polish: g refresh preserves
+;;           cursor position; tiles--strip-org-markup also handles
+;;           underline/strikethrough/code/verbatim; touch logic deduplicated.
 ;;   0.5.1 - Similar notes: press m in a read-only tile to list the top
 ;;           tiles-similar-count notes most similar to it (TF-IDF over
 ;;           shared content tokens, bold *keywords* boosted). q closes
@@ -189,7 +202,7 @@
 (declare-function file-notify-add-watch "filenotify" (file flags callback))
 (declare-function file-notify-rm-watch "filenotify" (descriptor))
 
-(defconst tiles-version "0.5.1"
+(defconst tiles-version "0.5.2"
   "Current version of TILES.")
 
 ;;; Customization
@@ -283,6 +296,21 @@ Possible values:
                  (const :tag "Inhibit tags" inhibit)
                  (repeat :tag "Allowed tags list (only these accepted)" string)
                  (sexp :tag "At least one required (free input otherwise): (required-one-of \"tag1\" ...)"))
+  :group 'tiles)
+
+(defcustom tiles-dblock-html-anchor nil
+  "When non-nil, `tiles-files' dblocks emit an HTML anchor before each note.
+The anchor is an `@@html:<a id=\"...\">@@' Org export snippet that lets
+exported HTML link to individual notes by timestamp.  Notes whose tags
+include any member of `tiles-dblock-no-anchor-tags' skip the anchor."
+  :type 'boolean
+  :group 'tiles)
+
+(defcustom tiles-dblock-no-anchor-tags nil
+  "List of tag strings that suppress the HTML anchor in `tiles-files' dblocks.
+Only meaningful when `tiles-dblock-html-anchor' is non-nil.  A note that
+has any of these tags will not get an HTML anchor."
+  :type '(repeat string)
   :group 'tiles)
 
 ;;; Internal Variables
@@ -508,6 +536,7 @@ Removes the persistent cache file as well."
   (clrhash tiles--file-index-record)
   (clrhash tiles--content-token-cache)
   (setq tiles--index-complete nil)
+  (setq tiles--cache-loaded nil)
   (when (and tiles-cache-file (file-exists-p tiles-cache-file))
     (delete-file tiles-cache-file))
   (message "Tiles cache cleared"))
@@ -648,12 +677,40 @@ AND within each group, OR across groups."
           (setq result (append files result)))))
     (delete-dups result)))
 
-(defun tiles--files-matching-keyword-query (query-keywords)
-  "Return files matching any of QUERY-KEYWORDS via the reverse index."
+(defun tiles--files-matching-keyword-and-group (and-group)
+  "Return files matching every term in AND-GROUP.
+AND-GROUP is a list of (NEGATE . TERM) pairs as produced by
+`tiles--parse-keyword-query'.  Positive terms intersect; negative terms
+are subtracted.  An all-negative group starts from the universe of all
+indexed files."
+  (let ((positive (seq-filter (lambda (t1) (not (car t1))) and-group))
+        (negative (seq-filter #'car and-group))
+        files)
+    (cond
+     (positive
+      (setq files (tiles--files-with-keyword-substring (cdr (car positive))))
+      (dolist (term (cdr positive))
+        (setq files (seq-intersection
+                     files
+                     (tiles--files-with-keyword-substring (cdr term))
+                     #'equal))))
+     (negative
+      (setq files (hash-table-keys tiles--file-index-record))))
+    (dolist (term negative)
+      (let ((excluded (tiles--files-with-keyword-substring (cdr term))))
+        (setq files (seq-difference files excluded #'equal))))
+    files))
+
+(defun tiles--files-matching-keyword-query (query-and-groups)
+  "Return files matching keyword QUERY-AND-GROUPS via the reverse index.
+QUERY-AND-GROUPS is the output of `tiles--parse-keyword-query'.
+AND within each group, OR across groups; `!'-prefixed terms negate."
   (tiles--ensure-index)
   (let (out)
-    (dolist (kw query-keywords)
-      (setq out (append (tiles--files-with-keyword-substring kw) out)))
+    (dolist (and-group query-and-groups)
+      (when and-group
+        (setq out (append (tiles--files-matching-keyword-and-group and-group)
+                          out))))
     (delete-dups out)))
 
 (defun tiles--sort-newest-first (files)
@@ -787,16 +844,46 @@ notes with both b218 AND lx2026, OR notes with misc."
                              and-group))
               query-and-groups)))
 
-(defun tiles--note-matches-keyword-p (note-data query-keywords)
-  "Check if NOTE-DATA matches any of QUERY-KEYWORDS.
-Query keywords are normalized (hyphens replaced with spaces) before matching."
+(defun tiles--parse-keyword-query (query)
+  "Parse QUERY into AND-groups for keyword matching.
+`/' means AND (all terms in the group must match), space means OR (any
+group matches).  A `!' prefix on a term negates it (the keyword must
+NOT be present in the note).  Hyphens inside a term are preserved here;
+normalization happens at match time.
+
+Each AND-group is returned as a list of (NEGATE . TERM) cons cells.
+For example, \"foo/!bar baz\" parses to
+\((nil . \"foo\") (t . \"bar\")) ((nil . \"baz\"))."
+  (mapcar (lambda (part)
+            (mapcar (lambda (term)
+                      (if (string-prefix-p "!" term)
+                          (cons t (substring term 1))
+                        (cons nil term)))
+                    (split-string part "/" t)))
+          (split-string query " " t)))
+
+(defun tiles--keyword-present-p (qkw note-keywords)
+  "Return non-nil if QKW (after normalization) matches any of NOTE-KEYWORDS."
+  (let ((normalized (tiles--normalize-keyword qkw)))
+    (seq-some (lambda (nkw)
+                (string-match-p (regexp-quote normalized) nkw))
+              note-keywords)))
+
+(defun tiles--note-matches-keyword-p (note-data query-and-groups)
+  "Check if NOTE-DATA matches QUERY-AND-GROUPS.
+QUERY-AND-GROUPS is the output of `tiles--parse-keyword-query': a list
+of AND-groups, each a list of (NEGATE . TERM) pairs.  All terms in a
+group must match (positive terms present, negative terms absent);
+groups are OR'd together."
   (let ((note-keywords (plist-get note-data :keywords)))
-    (seq-some (lambda (qkw)
-                (let ((normalized (tiles--normalize-keyword qkw)))
-                  (seq-some (lambda (nkw)
-                              (string-match-p (regexp-quote normalized) nkw))
-                            note-keywords)))
-              query-keywords)))
+    (seq-some
+     (lambda (and-group)
+       (seq-every-p
+        (lambda (term)
+          (let ((has (tiles--keyword-present-p (cdr term) note-keywords)))
+            (if (car term) (not has) has)))
+        and-group))
+     query-and-groups)))
 
 (defun tiles--validate-note-format (content)
   "Validate that CONTENT follows the TILES note format.
@@ -1102,36 +1189,41 @@ and adds visual breathing room at the top via the header line."
     (kill-local-variable 'word-wrap)
     (kill-local-variable 'truncate-lines)))
 
+(defun tiles--touch-rename (filepath)
+  "Prompt to rename FILEPATH to a fresh current-time timestamp.
+On confirmation, performs the rename and evicts the old path from the
+cache.  Returns the new filepath, or nil if the user declined."
+  (let* ((old-ts (tiles--filename-to-timestamp (file-name-nondirectory filepath)))
+         (new-name (tiles--generate-filename))
+         (new-filepath (expand-file-name new-name (file-name-directory filepath)))
+         (new-ts (tiles--filename-to-timestamp new-name)))
+    (when (yes-or-no-p (format "Update timestamp from %s to %s? " old-ts new-ts))
+      (rename-file filepath new-filepath)
+      (tiles--evict-file filepath)
+      new-filepath)))
+
 ;;;###autoload
 (defun tiles-touch ()
   "Update the current note's timestamp to now and rename the file accordingly.
 Must be visiting a TILES note file.  Asks for confirmation."
   (interactive)
   (let ((filepath (buffer-file-name)))
-    (unless (and filepath
-                 (string-match-p "T[0-9]\\{14\\}\\.org$"
-                                 (file-name-nondirectory filepath)))
+    (unless (and filepath (tiles--tile-file-p filepath))
       (user-error "Not visiting a TILES note file"))
+    (when (buffer-modified-p)
+      (save-buffer))
     (let* ((old-name (file-name-nondirectory filepath))
-           (old-ts (tiles--filename-to-timestamp old-name))
-           (new-name (tiles--generate-filename))
-           (new-filepath (expand-file-name new-name (file-name-directory filepath)))
-           (new-ts (tiles--filename-to-timestamp new-name)))
-      (when (yes-or-no-p (format "Update timestamp from %s to %s? " old-ts new-ts))
-        ;; Save any unsaved changes first
-        (when (buffer-modified-p)
-          (save-buffer))
-        (rename-file filepath new-filepath)
-        (tiles--evict-file filepath)
+           (new-filepath (tiles--touch-rename filepath)))
+      (when new-filepath
         (set-visited-file-name new-filepath t t)
-        ;; Update preview in dashboard if open
         (when (equal tiles--preview-file filepath)
           (setq tiles--preview-file new-filepath))
         (let ((notes-buf (get-buffer tiles--notes-buffer-name)))
           (when notes-buf
             (with-current-buffer notes-buf
               (tiles-show-notes))))
-        (message "Renamed %s -> %s" old-name new-name)))))
+        (message "Renamed %s -> %s"
+                 old-name (file-name-nondirectory new-filepath))))))
 
 (defun tiles--quick-save (content tags)
   "Save a note with CONTENT and TAGS (slash-separated string)."
@@ -1211,11 +1303,15 @@ QUERY uses / for AND and space for OR.
 ;;;###autoload
 (defun tiles-keyword-search (query)
   "Search TILES notes by bold keywords.
-QUERY is a space-separated list of keywords (OR logic)."
-  (interactive "sSearch keywords: ")
-  (let* ((query-keywords (split-string query " " t))
+QUERY uses space for OR, `/' for AND, and a `!' prefix for NOT.
+\"foo bar\" matches notes containing either keyword.
+\"foo/bar\" matches notes containing both.
+\"foo/!bar\" matches notes containing foo but not bar.
+\"foo/bar baz\" = (foo AND bar) OR baz."
+  (interactive "sSearch keywords (space=OR, /=AND, !=NOT): ")
+  (let* ((query-and-groups (tiles--parse-keyword-query query))
          (results (tiles--sort-newest-first
-                   (tiles--files-matching-keyword-query query-keywords))))
+                   (tiles--files-matching-keyword-query query-and-groups))))
     (setq tiles--current-search-results results)
     (setq tiles--current-search-query query)
     (setq tiles--current-search-type 'keyword)
@@ -1274,9 +1370,8 @@ QUERY is a space-separated list of keywords (OR logic)."
                              (if desc "descending" "ascending")))
          (inhibit-read-only t))
     (erase-buffer)
-    (insert (propertize (format "%d unique %s  [%s]  (RET:search  %so:sort occurrence  a:sort alpha  d:toggle direction  q:quit)\n\n"
-                                (length keys) type-label sort-label
-                                (if (eq type 'keyword) "R:rename  " ""))
+    (insert (propertize (format "%d unique %s  [%s]  (RET:search  R:rename  o:sort occurrence  a:sort alpha  d:toggle direction  q:quit)\n\n"
+                                (length keys) type-label sort-label)
                         'face 'font-lock-comment-face
                         'tiles-header t))
     (dolist (item sorted)
@@ -1338,54 +1433,105 @@ QUERY is a space-separated list of keywords (OR logic)."
   (setq tiles--list-descending (not tiles--list-descending))
   (tiles--list-render))
 
+(defun tiles--rename-keyword-in-file (file old-keyword new-keyword)
+  "Replace bold OLD-KEYWORD with NEW-KEYWORD in FILE.
+Matching is done after normalizing hyphens to spaces, so `*Falcon-9*'
+matches the keyword \"Falcon 9\".  Returns non-nil if the file changed."
+  (with-temp-buffer
+    (insert-file-contents file)
+    (let ((modified nil))
+      (goto-char (point-min))
+      (while (re-search-forward "\\*\\([^*\n]+\\)\\*" nil t)
+        (when (string= (tiles--normalize-keyword (match-string 1))
+                       old-keyword)
+          (replace-match (format "*%s*" new-keyword) t t)
+          (setq modified t)))
+      (when modified
+        (write-region (point-min) (point-max) file nil 'silent)
+        t))))
+
+(defun tiles--rename-tag-in-file (file old-tag new-tag)
+  "Replace OLD-TAG with NEW-TAG on the tag line of FILE.
+The tag line is the last non-empty line of the file.  Returns non-nil
+if the file changed."
+  (with-temp-buffer
+    (insert-file-contents file)
+    (let* ((lines (split-string (buffer-string) "\n"))
+           (i (1- (length lines))))
+      (while (and (>= i 0) (string-empty-p (string-trim (nth i lines))))
+        (setq i (1- i)))
+      (when (>= i 0)
+        (let* ((tag-line (string-trim (nth i lines)))
+               (tags (split-string tag-line "/" t "[ \t]+"))
+               (renamed (mapcar (lambda (tag)
+                                  (if (string= tag old-tag) new-tag tag))
+                                tags)))
+          (when (not (equal tags renamed))
+            (setf (nth i lines) (mapconcat #'identity renamed "/"))
+            (erase-buffer)
+            (insert (mapconcat #'identity lines "\n"))
+            (write-region (point-min) (point-max) file nil 'silent)
+            t))))))
+
 (defun tiles-list-rename ()
-  "Rename the keyword on the current line across all note files.
-Prompts for a new name, then replaces every bold occurrence in all notes.
-Only works in keyword lists, not tag lists."
+  "Rename the tag or keyword on the current line across all note files.
+For keywords, replaces every `*old*' bold occurrence with `*new*'.
+For tags, replaces the tag in the tag line of every file that has it.
+Prompts for the new name and reports how many files were modified."
   (interactive)
-  (unless (eq tiles--list-type 'keyword)
-    (user-error "Rename is only supported for keywords"))
-  (let* ((raw (string-trim (buffer-substring-no-properties
+  (let* ((type tiles--list-type)
+         (label (if (eq type 'tag) "tag" "keyword"))
+         (raw (string-trim (buffer-substring-no-properties
                             (line-beginning-position) (line-end-position))))
          (item (if (string-match "^\\[[0-9]+\\] \\(.*\\)" raw)
                    (match-string 1 raw)
                  raw)))
     (when (or (not item) (string-empty-p item))
-      (user-error "No keyword on this line"))
+      (user-error "No %s on this line" label))
+    (when (and (eq type 'tag) (tiles--tags-inhibited-p))
+      (user-error "Tag rename is disabled (tiles-tag-mode is inhibit)"))
     (let ((new-name (string-trim
-                     (read-string (format "Rename \"%s\" to: " item) item))))
+                     (read-string (format "Rename %s \"%s\" to: " label item)
+                                  item))))
       (when (string-empty-p new-name)
-        (user-error "New keyword name cannot be empty"))
-      (when (string= (tiles--normalize-keyword new-name)
-                     (tiles--normalize-keyword item))
+        (user-error "New %s name cannot be empty" label))
+      (when (if (eq type 'tag)
+                (string= new-name item)
+              (string= (tiles--normalize-keyword new-name)
+                       (tiles--normalize-keyword item)))
         (user-error "New name is the same as the old name"))
-      (let ((count 0))
-        (tiles--ensure-index)
-        (dolist (file (copy-sequence (gethash item tiles--keyword-index)))
-          (let* ((note-data (tiles--parse-note-file file))
-                 (keywords (plist-get note-data :keywords)))
-            (when (member item keywords)
-              (with-temp-buffer
-                (insert-file-contents file)
-                (let ((modified nil))
-                  ;; Replace bold occurrences whose normalized form matches
-                  (goto-char (point-min))
-                  (while (re-search-forward "\\*\\([^*\n]+\\)\\*" nil t)
-                    (when (string= (tiles--normalize-keyword (match-string 1))
-                                   item)
-                      (replace-match (format "*%s*" new-name) t t)
-                      (setq modified t)))
-                  (when modified
-                    (write-region (point-min) (point-max) file nil 'silent)
-                    (remhash file tiles--cache)
-                    (tiles--parse-note-file file)
-                    (setq count (1+ count))))))))
-        (message "Renamed \"%s\" to \"%s\" in %d file%s"
-                 item new-name count (if (= count 1) "" "s"))
-        ;; Re-collect data and re-render
+      (when (eq type 'tag)
+        (cond
+         ((tiles--tags-restricted-p)
+          (unless (member new-name tiles-tag-mode)
+            (user-error "New tag not in allowed list: %s"
+                        (mapconcat #'identity tiles-tag-mode ", "))))
+         ((tiles--tags-required-one-of-p)
+          (when (and (member item (tiles--tags-required-list))
+                     (not (member new-name (tiles--tags-required-list))))
+            (unless (yes-or-no-p
+                     (format "\"%s\" is in the required list and \"%s\" is not.  Continue? "
+                             item new-name))
+              (user-error "Aborted"))))))
+      (tiles--ensure-index)
+      (let* ((index (if (eq type 'tag) tiles--tag-index tiles--keyword-index))
+             (files (copy-sequence (gethash item index)))
+             (rename-fn (if (eq type 'tag)
+                            #'tiles--rename-tag-in-file
+                          #'tiles--rename-keyword-in-file))
+             (count 0))
+        (dolist (file files)
+          (when (funcall rename-fn file item new-name)
+            (remhash file tiles--cache)
+            (tiles--parse-note-file file)
+            (setq count (1+ count))))
+        (message "Renamed %s \"%s\" to \"%s\" in %d file%s"
+                 label item new-name count (if (= count 1) "" "s"))
         (let ((data (tiles--list-collect-data)))
-          (setq-local tiles--list-items (cdr data))
-          (setq-local tiles--list-cross (car data))
+          (setq-local tiles--list-items
+                      (if (eq type 'tag) (car data) (cdr data)))
+          (setq-local tiles--list-cross
+                      (if (eq type 'tag) (cdr data) (car data)))
           (tiles--list-render))))))
 
 (defun tiles--list-collect-data ()
@@ -1465,6 +1611,7 @@ Press RET to filter the dashboard by the selected keyword."
     (define-key map (kbd "T") #'tiles-list-tags)
     (define-key map (kbd "K") #'tiles-list-keywords)
     (define-key map (kbd "u") #'tiles-notes-touch)
+    (define-key map (kbd "w") #'tiles-notes-copy)
     (define-key map (kbd "+") #'tiles-notes-load-more)
     (define-key map (kbd "0") #'tiles-notes-stitch)
     (define-key map (kbd "l") #'tiles-new)
@@ -1537,13 +1684,20 @@ FILENAME should match TYYYYMMDDHHMMSS.org."
   :group 'tiles)
 
 (defun tiles--strip-org-markup (text)
-  "Strip all `org-mode' markup from TEXT, returning plain text."
+  "Strip all `org-mode' markup from TEXT, returning plain text.
+Handles inline footnotes, links (with or without description), and the
+emphasis markups: bold (*x*), italic (/x/), underline (_x_),
+strikethrough (+x+), code (~x~), and verbatim (=x=)."
   (let ((result text))
     (setq result (replace-regexp-in-string "\\[fn:[^]]*\\]" "" result))
     (setq result (replace-regexp-in-string "\\[\\[\\(?:[^][]+\\)\\]\\[\\([^][]+\\)\\]\\]" "\\1" result))
     (setq result (replace-regexp-in-string "\\[\\[[^][]+\\]\\]" "" result))
     (setq result (replace-regexp-in-string "\\*\\([^*\n]+\\)\\*" "\\1" result))
     (setq result (replace-regexp-in-string "/\\([^/\n]+\\)/" "\\1" result))
+    (setq result (replace-regexp-in-string "_\\([^_\n]+\\)_" "\\1" result))
+    (setq result (replace-regexp-in-string "\\+\\([^+\n]+\\)\\+" "\\1" result))
+    (setq result (replace-regexp-in-string "~\\([^~\n]+\\)~" "\\1" result))
+    (setq result (replace-regexp-in-string "=\\([^=\n]+\\)=" "\\1" result))
     result))
 
 (defun tiles--render-org-preview (text)
@@ -1670,22 +1824,39 @@ QUERY is a space-separated list of tags to exclude."
     (unless filepath
       (user-error "No note on this line"))
     (let* ((old-name (file-name-nondirectory filepath))
-           (old-ts (tiles--filename-to-timestamp old-name))
-           (new-name (tiles--generate-filename))
-           (new-filepath (expand-file-name new-name (file-name-directory filepath)))
-           (new-ts (tiles--filename-to-timestamp new-name)))
-      (when (yes-or-no-p (format "Update timestamp from %s to %s? " old-ts new-ts))
-        ;; Close preview if showing this file
+           (new-filepath (tiles--touch-rename filepath)))
+      (when new-filepath
+        ;; Close preview if it was showing the renamed file
         (when (equal tiles--preview-file filepath)
           (let* ((buf (get-file-buffer filepath))
                  (win (when buf (get-buffer-window buf))))
             (when win (delete-window win))
             (when buf (kill-buffer buf))
             (setq tiles--preview-file nil)))
-        (rename-file filepath new-filepath)
-        (tiles--evict-file filepath)
         (tiles-show-notes)
-        (message "Renamed %s -> %s" old-name new-name)))))
+        (message "Renamed %s -> %s"
+                 old-name (file-name-nondirectory new-filepath))))))
+
+(defun tiles-notes-copy ()
+  "Copy the content of the note on the current line to the kill ring.
+Private (`&&') paragraphs are excluded, matching what is shown in
+previews and stitched views."
+  (interactive)
+  (let ((filepath (tiles--notes-current-file)))
+    (unless filepath
+      (user-error "No note on this line"))
+    (let* ((note-data (tiles--parse-note-file filepath))
+           (content (when note-data
+                      (string-trim
+                       (tiles--strip-private-paragraphs
+                        (or (plist-get note-data :content) ""))))))
+      (if (and content (not (string-empty-p content)))
+          (progn
+            (kill-new content)
+            (message "Copied %d character%s to the kill ring"
+                     (length content)
+                     (if (= (length content) 1) "" "s")))
+        (message "Note is empty")))))
 
 (defun tiles-notes-load-more ()
   "Load the next batch of notes in the dashboard."
@@ -1731,7 +1902,7 @@ Uses `tiles--notes-exclude' and the reverse index."
                            (tiles--files-matching-tag-query
                             (tiles--parse-tag-query query))
                          (tiles--files-matching-keyword-query
-                          (split-string query " " t))))
+                          (tiles--parse-keyword-query query))))
              (match-set (make-hash-table :test 'equal)))
         (dolist (f matching) (puthash f t match-set))
         (seq-filter (lambda (f) (gethash f match-set)) result)))))
@@ -1745,6 +1916,11 @@ Shows a dashboard with statistics and note listing."
     (setq tiles--debug-cache-hits 0
           tiles--debug-cache-misses 0))
   (let* ((tiles--debug-t0 (when tiles-debug (float-time)))
+         ;; Remember which note is selected when refreshing in place,
+         ;; so we can restore the cursor on that line after re-render.
+         (prev-selection (when (string= (buffer-name) tiles--notes-buffer-name)
+                           (get-text-property (line-beginning-position)
+                                              'tiles-filepath)))
          (all-files (tiles--get-all-tile-files))
          (tiles--debug-t1 (when tiles-debug (float-time)))
          (filtered (tiles--apply-filter all-files))
@@ -1783,10 +1959,10 @@ Shows a dashboard with statistics and note listing."
           (let* ((load-time (- (float-time) start-time))
                  (title (format "  *T*agged *I*nstant *L*ightweight *E*macs *S*nippets (TILES), v%s | %d notes | loaded in %.3fs\n"
                                 tiles-version num-all load-time))
-                 (keys (concat "  [SPC] view, [RET] open, [M-RET] read-only, [TAB] expand, [f] format, [d] chg date, [u] touch, [0] stitch, [D] delete, [g] refresh, [+] more, [q] quit\n"
+                 (keys (concat "  [SPC] view, [RET] open, [M-RET] read-only, [TAB] expand, [f] format, [d] chg date, [u] touch, [w] copy, [0] stitch, [D] delete, [g] refresh\n"
                                (if (tiles--tags-inhibited-p)
-                                   "  [k] filter keyword, [K] list keywords, [c] clr search, [l] new tile\n"
-                                 "  [t] filter tag, [k] filter keyword, [F] exclude tags, [T] list tags, [K] list keywords, [c] clr search, [C] clr excl, [l] new tile\n")))
+                                   "  [k] filter keyword, [K] list keywords, [c] clr search, [l] new tile, [q] quit\n"
+                                 "  [t] filter tag, [k] filter keyword, [F] exclude tags, [T] list tags, [K] list keywords, [c] clr search, [C] clr excl, [l] new tile, [q] quit\n")))
                  (lunar-str (or (condition-case nil
                                     (tiles--next-lunar-event)
                                   (error nil))
@@ -1827,9 +2003,20 @@ Shows a dashboard with statistics and note listing."
                        tiles--debug-cache-hits
                        tiles--debug-cache-misses))))
         (tiles-notes-view-mode)
-        ;; Move past header to first note line
+        ;; Restore cursor to the previously selected note if it is still
+        ;; displayed; otherwise jump to the first note line.
         (goto-char (point-min))
-        (text-property-search-forward 'tiles-filepath)))))
+        (unless (and prev-selection
+                     (let (found)
+                       (while (and (not found) (not (eobp)))
+                         (if (and (equal (get-text-property (point) 'tiles-filepath)
+                                         prev-selection)
+                                  (not (get-text-property (point) 'tiles-header)))
+                             (setq found t)
+                           (forward-line 1)))
+                       found))
+          (goto-char (point-min))
+          (text-property-search-forward 'tiles-filepath))))))
 
 (defun tiles--notes-on-note-line-p ()
   "Return t if point is on a note line (not an expanded detail line)."
@@ -1930,8 +2117,10 @@ Activates `tiles-readonly-mode' so `m' shows similar notes."
           (other-window 1))))))
 
 (defun tiles--note-expanded-extra (note-data file)
-  "Return two extra lines for NOTE-DATA: keywords and stats.
-FILE is the path to the note file, used to compute filesize."
+  "Return up to three extra lines for NOTE-DATA.
+The lines are: private (`&&') paragraphs when present, keywords, and stats
+\(char/word counts and on-disk size).  FILE is the path to the note file,
+used to compute filesize."
   (let* ((content (or (plist-get note-data :content) ""))
          (filepath (plist-get note-data :filepath))
          (indent (make-string 20 ?\s))
@@ -2605,9 +2794,12 @@ Press \\<tiles-readonly-mode-map>\\[tiles-show-similar] to list notes similar to
   (interactive)
   (let ((pos (point))
         (prev-pos nil))
-    (dolist (boundary tiles--stitched-boundaries)
-      (when (< (car boundary) pos)
-        (setq prev-pos (car boundary))))
+    ;; Boundaries are sorted ascending; stop at the first one >= pos.
+    (catch 'done
+      (dolist (boundary tiles--stitched-boundaries)
+        (if (< (car boundary) pos)
+            (setq prev-pos (car boundary))
+          (throw 'done nil))))
     (if prev-pos
         (goto-char prev-pos)
       (message "At first note"))))
@@ -2653,7 +2845,7 @@ Supports :tags, :keywords, :sort (\"newest\" or \"oldest\"), and :limit."
                          note-data (tiles--parse-tag-query tags)))
                     (or (not keywords)
                         (tiles--note-matches-keyword-p
-                         note-data (split-string keywords " " t))))))
+                         note-data (tiles--parse-keyword-query keywords))))))
            files)))
     (when (equal sort-order "oldest")
       (setq filtered (nreverse filtered)))
@@ -2689,7 +2881,10 @@ PARAMS supports :tags, :keywords, :sort (\"newest\"/\"oldest\"), :limit."
 (defun org-dblock-write:tiles-files (params)
   "Dynamic block: embed the contents of matching TILES notes.
 PARAMS supports :tags, :keywords, :sort (\"newest\"/\"oldest\"), :limit,
-and :separator (string between notes, default blank line)."
+and :separator (string between notes, default blank line).
+When `tiles-dblock-html-anchor' is non-nil, each note is preceded by an
+`@@html:<a id=\"...\">@@' Org export snippet, unless the note has a tag
+listed in `tiles-dblock-no-anchor-tags'."
   (let ((files (tiles--dblock-get-files params))
         (separator (or (plist-get params :separator) "\n")))
     (if (not files)
@@ -2704,8 +2899,12 @@ and :separator (string between notes, default blank line)."
               (let ((anchor (file-name-sans-extension
                              (file-name-nondirectory file)))
                     (tags (plist-get note-data :tags)))
-                (unless (member "crewo" tags)
-                  (insert (format "@@html:<a id=\"%s\" href=\"#%s\" class=\"paragraph-link\">&rarr;</a>@@\n" anchor anchor)))
+                (when (and tiles-dblock-html-anchor
+                           (not (seq-some (lambda (tag)
+                                            (member tag tiles-dblock-no-anchor-tags))
+                                          tags)))
+                  (insert (format "@@html:<a id=\"%s\" href=\"#%s\" class=\"paragraph-link\">&rarr;</a>@@\n"
+                                  anchor anchor)))
                 (insert (tiles--strip-private-paragraphs
                          (plist-get note-data :content)))
                 (insert "\n")))))))))

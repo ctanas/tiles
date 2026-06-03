@@ -115,7 +115,7 @@ All commands are under the `C-c m` prefix:
 `C-c m m` launches the dashboard, which displays a chronological list of all notes. Each entry shows color-coded timestamps (showing hours and minutes to save space), inline previews, tags, and keywords. Timestamps are color-coded: green for today, darker green for recent (< 2 weeks), faded grey for older notes. The selection highlight is Lufthansa yellow. While the dashboard displays truncated timestamps for brevity, the actual filenames include timestamps down to the second level, allowing you to create multiple notes within the same minute without conflicts.
 
 ```
-  *T*agged *I*nstant *L*ightweight *E*macs *S*nippets (TILES), v0.5.1 | 42 notes | loaded in 0.023s
+  *T*agged *I*nstant *L*ightweight *E*macs *S*nippets (TILES), v0.5.2 | 42 notes | loaded in 0.023s
   ════════════════════════════════════════════════════════════════════════
   [SPC] view, [RET] open, [TAB] expand, [f] format, [d] chg date, [u] touch, [0] stitch, [D] delete, [g] refresh, [+] more, [q] quit
   [t] filter tag, [k] filter keyword, [F] exclude tags, [T] list tags, [K] list keywords, [c] clr search, [C] clr excl, [l] new tile
@@ -139,6 +139,7 @@ Dashboard keybindings:
 | `M-down`  | Move selected note down                       |
 | `d`       | Change note date/timestamp (renames file)     |
 | `u`       | Touch (update timestamp to now)               |
+| `w`       | Copy note content to the kill ring            |
 | `D`       | Delete note (with confirmation)               |
 | `t`       | Filter displayed notes by tag                 |
 | `k`       | Filter displayed notes by keyword             |
@@ -160,7 +161,7 @@ Dashboard keybindings:
 
 Sorting: `a` sorts alphabetically (a-z), `o` sorts by occurrence (high to low), `d` toggles ascending/descending.
 
-In the keyword list, press `R` to rename a keyword across all notes. You'll be prompted for a new name, and every bold occurrence (`*old*`) will be replaced in all note files that contain it.
+In either list, press `R` to rename the tag or keyword on the current line across all notes. You'll be prompted for a new name; for keywords every bold occurrence (`*old*`) is replaced, and for tags the entry is updated in every tag line that contains it. Hyphen normalization is respected on the keyword side, so `*Falcon-9*` is found when renaming "Falcon 9". Tag rename also respects `tiles-tag-mode`: in restricted mode the new name must be in the allowed list, and in `required-one-of` mode renaming a required tag away from the required list prompts for confirmation.
 
 ### Tag exclusion
 
@@ -180,12 +181,21 @@ This syntax applies everywhere: `tiles-tag-search`, dashboard filter (`t`), and 
 
 ### Keyword search syntax
 
-Keyword queries use SPC-separated terms with **OR** logic — any matching term is enough:
+Keyword queries use the same AND/OR grammar as tag search, plus `!` for negation:
 
-| Query              | Meaning                                           |
-|--------------------|---------------------------------------------------|
-| `emacs`            | Notes with `emacs` as a bold keyword              |
-| `emacs lisp`       | Notes with **either** `emacs` or `lisp`           |
+| Operator           | Meaning                                            |
+|--------------------|----------------------------------------------------|
+| space              | OR (any group matches)                             |
+| `/`                | AND (all terms in the group must match)            |
+| `!` (prefix)       | NOT (the keyword must not be present)              |
+
+| Query              | Meaning                                            |
+|--------------------|----------------------------------------------------|
+| `emacs`            | Notes with `emacs` as a bold keyword               |
+| `emacs lisp`       | Notes with **either** `emacs` or `lisp`            |
+| `emacs/lisp`       | Notes with **both** `emacs` and `lisp`             |
+| `emacs/!lisp`      | Notes with `emacs` but **not** `lisp`              |
+| `emacs/lisp misc`  | (`emacs` AND `lisp`) OR `misc`                     |
 
 Keywords are the `*bold*` words extracted from note content. Hyphens in keywords are normalized to spaces for matching and display — `*Falcon-9*` and `*Falcon 9*` are treated as the same keyword ("Falcon 9") — but the note content itself is never modified. This syntax applies to `tiles-keyword-search`, dashboard filter (`k`), and dynamic block `:keywords` parameter.
 
@@ -305,8 +315,8 @@ Second matching note content...
 
 | Parameter    | Description                                | Default     |
 |--------------|--------------------------------------------|-------------|
-| `:tags`      | Space-separated tags (OR logic)            | —           |
-| `:keywords`  | Space-separated keywords (OR logic)        | —           |
+| `:tags`      | Tag query (space=OR, `/`=AND)              | —           |
+| `:keywords`  | Keyword query (space=OR, `/`=AND, `!`=NOT) | —           |
 | `:sort`      | `"newest"` or `"oldest"`                   | `"newest"`  |
 | `:limit`     | Maximum number of notes                    | unlimited   |
 | `:separator` | String between notes (`tiles-files` only)  | blank line  |
@@ -343,6 +353,11 @@ All settings are available via `M-x customize-group RET tiles`.
 | `tiles-cache-file`     | Path for the persistent cache (`nil` to disable) | `~/.emacs.d/tiles-cache.el` |
 | `tiles-watch-files`    | Watch `tiles-directory` via `file-notify` | `t`                 |
 | `tiles-tag-mode`       | Controls tag behavior (see below)        | `'unrestricted`      |
+| `tiles-similar-count`  | Number of notes shown by `tiles-show-similar` | `5`              |
+| `tiles-similar-keyword-weight` | TF-IDF boost for shared bold keywords | `3.0`              |
+| `tiles-similar-min-token-length` | Min token length for similarity scoring | `3`            |
+| `tiles-dblock-html-anchor` | Emit `@@html:<a id="...">@@` anchor before each note in `tiles-files` dblocks | `nil` |
+| `tiles-dblock-no-anchor-tags` | Tags that suppress the HTML anchor when it is enabled | `nil` |
 
 ### Tag mode
 
@@ -418,6 +433,7 @@ Example:
 
 ## Changelog
 
+- **0.5.2** — Keyword search now supports AND (`/`) and NOT (`!`) alongside the existing space-as-OR (`emacs/!lisp` = `emacs` AND NOT `lisp`). Tag rename: `R` in the tag list renames a tag across every note's tag line, parallel to keyword rename. New dashboard key `w` copies the selected note (private `&&` paragraphs stripped) to the kill ring. The HTML anchor that `tiles-files` dynamic blocks used to emit unconditionally is now opt-in via `tiles-dblock-html-anchor`, with per-tag suppression via `tiles-dblock-no-anchor-tags`. Polish: `g` refresh in the dashboard preserves the previously selected note's position; `tiles--strip-org-markup` also handles underline/strikethrough/code/verbatim; touch logic deduplicated; `tiles-stitched-prev` early-breaks; `tiles-clear-cache` also resets the persistent-cache load flag.
 - **0.5.1** — Similar notes: press `m` in a read-only tile buffer (`M-RET` from the dashboard) to list the top `tiles-similar-count` notes most similar to it. Scoring is TF-IDF over shared content tokens, with bold `*keywords*` boosted by `tiles-similar-keyword-weight`. `q` closes the read-only buffer.
 - **0.5** — Persistent on-disk cache (`tiles-cache-file`, mtime-validated, disable by setting to `nil`) so warmup is a one-time cost across sessions. Reverse index (tag → files, keyword → files) speeds up tag/keyword search, dashboard filter, and the tag/keyword lists from O(all files) to O(matching files). `file-notify` watches (`tiles-watch-files`, default `t`) catch external edits (other Emacs instances, mobile sync, `git pull`). New `tiles-year-subfolders` option to save new notes in a `YYYY/` subfolder (loading remains recursive, so existing notes in any layout are still found). Focus-mode fixes: cursor positioning now uses the header line for top padding (no more stray padding lines saved to file), and the focus-mode overlay no longer duplicates when revisiting a note.
 - **0.4** — MELPA-compliance pass: removed load-time `global-set-key` (bindings now applied via a keymap), addressed `package-lint`, `checkdoc`, and byte-compile warnings. New `tiles-insert-tag` command (`C-c m t` inside a capture buffer) inserts a tag at point using completion driven by `tiles-tag-mode`. New `required-one-of` tag mode (`(required-one-of TAG...)`): any tags are accepted, but at least one from the list must be present. Fix: focus mode no longer leaves stale state on save.
