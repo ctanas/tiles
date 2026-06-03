@@ -139,7 +139,8 @@ Dashboard keybindings:
 | `M-down`  | Move selected note down                       |
 | `d`       | Change note date/timestamp (renames file)     |
 | `u`       | Touch (update timestamp to now)               |
-| `w`       | Copy note content to the kill ring            |
+| `w`       | Copy note content to the kill ring (verbatim, markup preserved) |
+| `W`       | Copy note content to the kill ring as plain text (markup stripped) |
 | `D`       | Delete note (with confirmation)               |
 | `t`       | Filter displayed notes by tag                 |
 | `k`       | Filter displayed notes by keyword             |

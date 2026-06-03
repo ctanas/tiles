@@ -1612,6 +1612,7 @@ Press RET to filter the dashboard by the selected keyword."
     (define-key map (kbd "K") #'tiles-list-keywords)
     (define-key map (kbd "u") #'tiles-notes-touch)
     (define-key map (kbd "w") #'tiles-notes-copy)
+    (define-key map (kbd "W") #'tiles-notes-copy-stripped)
     (define-key map (kbd "+") #'tiles-notes-load-more)
     (define-key map (kbd "0") #'tiles-notes-stitch)
     (define-key map (kbd "l") #'tiles-new)
@@ -1837,26 +1838,49 @@ QUERY is a space-separated list of tags to exclude."
         (message "Renamed %s -> %s"
                  old-name (file-name-nondirectory new-filepath))))))
 
-(defun tiles-notes-copy ()
-  "Copy the content of the note on the current line to the kill ring.
-Private (`&&') paragraphs are excluded, matching what is shown in
-previews and stitched views."
-  (interactive)
+(defun tiles--notes-copy-to-kill (strip-markup)
+  "Copy the note at point's content to the kill ring.
+Private (`&&') paragraphs are always excluded.  When STRIP-MARKUP is
+non-nil, also strip all org formatting (bold, italic, underline,
+strikethrough, code, verbatim, links, inline footnotes)."
   (let ((filepath (tiles--notes-current-file)))
     (unless filepath
       (user-error "No note on this line"))
     (let* ((note-data (tiles--parse-note-file filepath))
-           (content (when note-data
+           (raw (when note-data
+                  (tiles--strip-private-paragraphs
+                   (or (plist-get note-data :content) ""))))
+           (content (when raw
                       (string-trim
-                       (tiles--strip-private-paragraphs
-                        (or (plist-get note-data :content) ""))))))
+                       (if strip-markup
+                           (tiles--strip-org-markup raw)
+                         raw)))))
       (if (and content (not (string-empty-p content)))
           (progn
             (kill-new content)
-            (message "Copied %d character%s to the kill ring"
+            (message "Copied %d character%s (%s) to the kill ring"
                      (length content)
-                     (if (= (length content) 1) "" "s")))
+                     (if (= (length content) 1) "" "s")
+                     (if strip-markup "plain text" "verbatim")))
         (message "Note is empty")))))
+
+(defun tiles-notes-copy ()
+  "Copy the note on the current line to the kill ring verbatim.
+Private (`&&') paragraphs are stripped, matching what is shown in
+previews and stitched views, but `org-mode' markup (bold, italic,
+links, etc.) is preserved.  Use `tiles-notes-copy-stripped' (bound to
+`W' in the dashboard) for a plain-text copy with markup removed."
+  (interactive)
+  (tiles--notes-copy-to-kill nil))
+
+(defun tiles-notes-copy-stripped ()
+  "Copy the note on the current line to the kill ring as plain text.
+Strips both private (`&&') paragraphs and all `org-mode' formatting
+\(bold, italic, underline, strikethrough, code, verbatim, links,
+inline footnotes).  Bound to `W' in the dashboard; use `w' to copy
+verbatim with markup preserved."
+  (interactive)
+  (tiles--notes-copy-to-kill t))
 
 (defun tiles-notes-load-more ()
   "Load the next batch of notes in the dashboard."
