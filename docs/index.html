@@ -357,6 +357,17 @@
       margin-bottom: 1.2rem;
     }
 
+    /* ── Body links ────────────────────────────────────────────────── */
+    section a {
+      color: var(--ink);
+      text-decoration: underline;
+      text-decoration-color: var(--ink-faint);
+      text-underline-offset: 3px;
+    }
+    section a:hover {
+      text-decoration-color: var(--ink);
+    }
+
     /* ── Inline color refs ─────────────────────────────────────────── */
     .c-tag { color: var(--tag-red); font-family: var(--mono); font-size: 0.9em; }
     .c-kw  { color: var(--kw-green); font-family: var(--mono); font-size: 0.9em; }
@@ -760,6 +771,16 @@
     <p>The vault is a directory. Back it up however you back up files. Version it with <code>git</code>. Grep through it in the terminal. Copy it between machines. It does not require a running server, a sync daemon, a browser tab, or a paid account to stay accessible.</p>
 
     <p>The tools that read the vault today — TILES, TESS, any editor, any future tool — are interchangeable at the file boundary. The knowledge outlives the software.</p>
+  </div>
+</section>
+
+
+<!-- ── ACKNOWLEDGEMENTS ──────────────────────────────────────────────── -->
+<section>
+  <div class="wrap">
+    <p class="eyebrow">Acknowledgements</p>
+    <div class="rule-accent"></div>
+    <p>Many thanks to Protesilaos Stavrou for <a href="https://protesilaos.com/emacs/denote">Denote</a> and <a href="https://protesilaos.com/emacs/denote-org">Denote Org</a>, Kazuyuki Hiraoka for <a href="https://kaorahi.github.io/howm/">Howm</a>, Andrei Sukhovskii for the <a href="https://emacs101.github.io/howm.html">Howm Manual</a>, Jethro Kuan for <a href="https://www.orgroam.com/">Org-roam</a>, Jason Blevins for <a href="https://github.com/jrblevin/deft">Deft</a>, Zachary Schneirov for <a href="https://notational.net/">Notational Velocity</a>, and to all the developers of <a href="https://logseq.com/">Logseq</a> and <a href="https://obsidian.md/">Obsidian</a> for their inspiration into creating this package.</p>
   </div>
 </section>
 
