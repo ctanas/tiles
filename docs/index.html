@@ -384,20 +384,62 @@
 
     /* ── Footer ────────────────────────────────────────────────────── */
     footer {
-      background: var(--dark-bg);
-      border-top: 1px solid var(--dark-rule);
-      padding: 2.5rem 0;
-      text-align: center;
+      background: var(--bg);
+      border-top: 2px solid var(--ink);
+      padding: 3rem 0 2.5rem;
     }
-    footer p {
+    .footer-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0;
+    }
+    .footer-card {
+      padding: 1.5rem 2rem 1.5rem 0;
+      border-right: 1px solid var(--rule);
+    }
+    .footer-card + .footer-card {
+      border-right: none;
+      padding: 1.5rem 0 1.5rem 2rem;
+    }
+    .footer-card-name {
+      font-family: var(--serif);
+      font-size: 1.3rem;
+      font-weight: bold;
+      letter-spacing: -0.02em;
+      color: var(--ink);
+      margin-bottom: 0.25rem;
+    }
+    .footer-card-desc {
       font-family: var(--mono);
-      font-size: 0.66rem;
-      letter-spacing: 0.12em;
-      color: var(--dark-faint);
+      font-size: 0.68rem;
+      letter-spacing: 0.04em;
+      color: var(--ink-faint);
+      margin-bottom: 1rem;
     }
-    footer p + p { margin-top: 0.5rem; }
-    footer a { color: var(--dark-mid); text-decoration: underline; text-underline-offset: 3px; }
-    footer a:hover { color: var(--dark-ink); }
+    .footer-card a {
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      color: var(--ink);
+      text-decoration: none;
+      border-bottom: 1px solid var(--ink);
+      padding-bottom: 1px;
+    }
+    .footer-card a:hover { color: var(--accent); border-bottom-color: var(--accent); }
+    .footer-license {
+      margin-top: 2rem;
+      padding-top: 1.2rem;
+      border-top: 1px solid var(--rule);
+      font-family: var(--mono);
+      font-size: 0.63rem;
+      letter-spacing: 0.1em;
+      color: var(--ink-faint);
+      text-transform: uppercase;
+    }
+    @media (max-width: 600px) {
+      .footer-grid { grid-template-columns: 1fr; }
+      .footer-card { border-right: none; border-bottom: 1px solid var(--rule); padding: 1.5rem 0; }
+      .footer-card + .footer-card { border-bottom: none; padding: 1.5rem 0 0; }
+    }
 
     /* ── Screenshots ───────────────────────────────────────────────── */
     figure.screenshot {
@@ -725,8 +767,19 @@
 <!-- ── FOOTER ────────────────────────────────────────────────────────── -->
 <footer>
   <div class="wrap">
-    <p>TILES (Emacs package) &nbsp;·&nbsp; TESS (Electron desktop) &nbsp;·&nbsp; GPL-3.0</p>
-    <p><a href="https://github.com/ctanas/tiles">github.com/ctanas/tiles</a> &nbsp;·&nbsp; <a href="https://github.com/ctanas/tess">github.com/ctanas/tess</a></p>
+    <div class="footer-grid">
+      <div class="footer-card">
+        <div class="footer-card-name">TILES</div>
+        <div class="footer-card-desc">Tagged Instant Lightweight Emacs Snippets</div>
+        <a href="https://github.com/ctanas/tiles">github.com/ctanas/tiles</a>
+      </div>
+      <div class="footer-card">
+        <div class="footer-card-name">TESS</div>
+        <div class="footer-card-desc">Temporal Entry Stitch System</div>
+        <a href="https://github.com/ctanas/tess">github.com/ctanas/tess</a>
+      </div>
+    </div>
+    <div class="footer-license">GPL-3.0 &nbsp;·&nbsp; Plain text, forever.</div>
   </div>
 </footer>
 
