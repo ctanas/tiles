@@ -323,6 +323,27 @@
 
     .same { color: var(--ink-faint); font-style: italic; }
 
+    /* ── Repo link ─────────────────────────────────────────────────── */
+    .repo-link {
+      display: inline-block;
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      letter-spacing: 0.06em;
+      color: var(--ink);
+      border: 1px solid var(--ink);
+      padding: 0.35em 0.85em;
+      margin-bottom: 1.8rem;
+      text-decoration: none;
+      transition: background 0.15s, color 0.15s;
+    }
+    .repo-link:hover {
+      background: var(--ink);
+      color: var(--bg);
+    }
+    .repo-link::before {
+      content: '↗  ';
+    }
+
     /* ── TESS badge ────────────────────────────────────────────────── */
     .tess-badge {
       display: inline-block;
@@ -490,6 +511,7 @@
     <p class="eyebrow">TILES — Emacs Package</p>
     <div class="rule-accent"></div>
     <h2>The Emacs interface</h2>
+    <a class="repo-link" href="https://github.com/ctanas/tiles">github.com/ctanas/tiles</a>
     <p style="font-family: var(--mono); font-size: 0.75rem; letter-spacing: 0.08em; color: var(--ink-faint); margin-bottom: 1.8rem; margin-top: -0.8rem;"><strong style="color: var(--ink-mid);">T</strong>agged <strong style="color: var(--ink-mid);">I</strong>nstant <strong style="color: var(--ink-mid);">L</strong>ightweight <strong style="color: var(--ink-mid);">E</strong>macs <strong style="color: var(--ink-mid);">S</strong>nippets</p>
 
     <p>TILES is a single-file Emacs Lisp package (<code>tiles.el</code>). No build system, no external dependencies beyond Emacs itself and the built-in <code>org</code>, <code>lunar</code>, and <code>filenotify</code> libraries. Install it by loading the file; evaluate the buffer to test changes.</p>
@@ -576,6 +598,7 @@
     <div class="rule-accent"></div>
     <span class="tess-badge">Temporal Entry Stitch System</span>
     <h2>The desktop GUI</h2>
+    <a class="repo-link" href="https://github.com/ctanas/tess">github.com/ctanas/tess</a>
 
     <p>You don't use Emacs? Maybe you find it intimidating, or you're one of those people that uses <em>the other editor</em>? TESS is a small, fast Electron desktop application for the same vault format. It is not a port of TILES — it is a different entry point to the same files, designed for when you want a native window rather than an editor extension.</p>
 
