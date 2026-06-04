@@ -1,0 +1,711 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TILES &amp; TESS — Plain-text note-taking</title>
+  <style>
+    /* ── Design tokens ─────────────────────────────────────────────── */
+    :root {
+      --bg:          #F6F3EE;
+      --bg-code:     #EAE6DC;
+      --ink:         #1C1917;
+      --ink-mid:     #57534E;
+      --ink-faint:   #A8A29E;
+      --rule:        #D6D0C8;
+      --accent:      #2B5329;
+      --tag-red:     #9B0000;
+      --kw-green:    #1A5C1A;
+      --dark-bg:     #18160F;
+      --dark-ink:    #F0EDE6;
+      --dark-mid:    #B5AFA6;
+      --dark-faint:  #5C5850;
+      --dark-rule:   #2E2B24;
+
+      --serif:  Georgia, 'Palatino Linotype', 'Book Antiqua', Palatino, serif;
+      --mono:   'Courier New', Courier, 'Lucida Console', monospace;
+      --measure: 66ch;
+    }
+
+    /* ── Reset ─────────────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html { font-size: 18px; scroll-behavior: smooth; }
+
+    body {
+      background: var(--bg);
+      color: var(--ink);
+      font-family: var(--serif);
+      line-height: 1.75;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* ── Layout ────────────────────────────────────────────────────── */
+    .wrap {
+      max-width: var(--measure);
+      margin: 0 auto;
+      padding: 0 2rem;
+    }
+
+    section {
+      padding: 5rem 0;
+      border-top: 1px solid var(--rule);
+    }
+
+    /* ── Hero ──────────────────────────────────────────────────────── */
+    .hero {
+      padding: 9rem 0 7rem;
+      text-align: center;
+      border-top: none;
+      border-bottom: 1px solid var(--rule);
+    }
+
+    .hero-eyebrow {
+      font-family: var(--mono);
+      font-size: 0.67rem;
+      letter-spacing: 0.3em;
+      text-transform: uppercase;
+      color: var(--ink-faint);
+      margin-bottom: 3rem;
+    }
+
+    .wordmark {
+      display: flex;
+      align-items: baseline;
+      justify-content: center;
+      gap: 0.15em;
+      margin-bottom: 3rem;
+      line-height: 1;
+    }
+
+    .wm-tiles {
+      font-family: var(--serif);
+      font-size: 5.5rem;
+      font-weight: bold;
+      letter-spacing: -0.03em;
+      color: var(--ink);
+    }
+
+    .wm-amp {
+      font-family: var(--serif);
+      font-size: 2.2rem;
+      color: var(--ink-faint);
+      font-weight: normal;
+      padding: 0 0.1em;
+    }
+
+    .wm-tess {
+      font-family: var(--serif);
+      font-size: 3rem;
+      font-weight: normal;
+      color: var(--ink-mid);
+    }
+
+    .hero-statement {
+      font-size: 1.25rem;
+      font-style: italic;
+      color: var(--ink-mid);
+      max-width: 44ch;
+      margin: 0 auto 3.5rem;
+      line-height: 1.55;
+    }
+
+    .pills {
+      display: flex;
+      justify-content: center;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+    }
+
+    .pill {
+      font-family: var(--mono);
+      font-size: 0.64rem;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      color: var(--ink-faint);
+      border: 1px solid var(--rule);
+      padding: 0.3em 0.85em;
+    }
+
+    /* ── Section anatomy ───────────────────────────────────────────── */
+    .eyebrow {
+      font-family: var(--mono);
+      font-size: 0.63rem;
+      letter-spacing: 0.3em;
+      text-transform: uppercase;
+      color: var(--ink-mid);
+      margin-bottom: 0.9rem;
+    }
+
+    .rule-accent {
+      width: 2.5rem;
+      height: 2px;
+      background: var(--accent);
+      margin-bottom: 2rem;
+    }
+
+    h2 {
+      font-family: var(--serif);
+      font-size: 2rem;
+      font-weight: bold;
+      letter-spacing: -0.025em;
+      line-height: 1.2;
+      color: var(--ink);
+      margin-bottom: 1.6rem;
+    }
+
+    h3 {
+      font-family: var(--serif);
+      font-size: 1.1rem;
+      font-weight: bold;
+      letter-spacing: -0.01em;
+      color: var(--ink);
+      margin: 2.5rem 0 0.75rem;
+    }
+
+    p {
+      color: var(--ink-mid);
+      margin-bottom: 1.1rem;
+    }
+
+    p:last-child { margin-bottom: 0; }
+
+    strong { color: var(--ink); }
+
+    code {
+      font-family: var(--mono);
+      font-size: 0.83em;
+      background: var(--bg-code);
+      padding: 0.1em 0.35em;
+      color: var(--ink);
+    }
+
+    ul {
+      padding-left: 1.4rem;
+      margin-bottom: 1.1rem;
+    }
+    li {
+      color: var(--ink-mid);
+      margin-bottom: 0.35rem;
+    }
+
+    /* ── Callout quote ─────────────────────────────────────────────── */
+    .callout {
+      border-top: 2px solid var(--ink);
+      border-bottom: 1px solid var(--rule);
+      padding: 1.6rem 0;
+      margin: 2.5rem 0;
+    }
+    .callout p {
+      font-size: 1.1rem;
+      font-style: italic;
+      color: var(--ink);
+      margin: 0;
+      line-height: 1.5;
+    }
+
+    /* ── Note file example ─────────────────────────────────────────── */
+    .note-file {
+      margin: 2.5rem 0;
+      border: 1px solid var(--rule);
+      overflow: hidden;
+    }
+
+    .note-file-bar {
+      background: var(--rule);
+      padding: 0.45rem 1rem;
+      font-family: var(--mono);
+      font-size: 0.68rem;
+      letter-spacing: 0.04em;
+      color: var(--ink-mid);
+      display: flex;
+      justify-content: space-between;
+    }
+
+    .note-file-body {
+      background: var(--bg-code);
+      padding: 1.4rem 1.5rem;
+      font-family: var(--mono);
+      font-size: 0.82rem;
+      line-height: 1.9;
+      white-space: pre-wrap;
+      color: var(--ink);
+    }
+
+    .n-kw  { color: var(--kw-green); font-weight: bold; }
+    .n-tag { color: var(--tag-red); }
+    .n-prv { color: var(--ink-faint); font-style: italic; }
+
+    /* ── Key bindings ──────────────────────────────────────────────── */
+    .kb {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.83rem;
+      line-height: 1.4;
+      margin: 1.8rem 0;
+    }
+    .kb thead th {
+      font-family: var(--mono);
+      font-size: 0.62rem;
+      letter-spacing: 0.25em;
+      text-transform: uppercase;
+      color: var(--ink-faint);
+      text-align: left;
+      padding: 0.25rem 1rem 0.25rem 0;
+      border-bottom: 1px solid var(--ink);
+    }
+    .kb td {
+      padding: 0.25rem 1rem 0.25rem 0;
+      border-bottom: 1px solid var(--rule);
+      color: var(--ink-mid);
+      vertical-align: top;
+    }
+    .kb tr:last-child td { border-bottom: none; }
+    .kb .key {
+      font-family: var(--mono);
+      font-size: 0.79rem;
+      color: var(--ink);
+      white-space: nowrap;
+    }
+    .kb td:first-child { width: 14ch; }
+
+    /* ── Query block ───────────────────────────────────────────────── */
+    .qblock {
+      background: var(--bg-code);
+      border-left: 3px solid var(--accent);
+      padding: 1rem 1.4rem;
+      margin: 1.4rem 0;
+      font-family: var(--mono);
+      font-size: 0.8rem;
+      line-height: 2;
+    }
+    .qlabel {
+      font-size: 0.62rem;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      color: var(--ink-faint);
+      margin-bottom: 0.4rem;
+      font-family: var(--mono);
+    }
+    .qline { color: var(--ink); }
+    .qcomment { color: var(--ink-faint); }
+
+    /* ── Interop table ─────────────────────────────────────────────── */
+    .interop {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.83rem;
+      line-height: 1.4;
+      margin: 2rem 0;
+    }
+    .interop thead th {
+      font-family: var(--mono);
+      font-size: 0.63rem;
+      letter-spacing: 0.25em;
+      text-transform: uppercase;
+      color: var(--ink-faint);
+      text-align: left;
+      padding: 0.25rem 1.2rem 0.25rem 0;
+      border-bottom: 2px solid var(--ink);
+    }
+    .interop td {
+      padding: 0.3rem 1.2rem 0.3rem 0;
+      border-bottom: 1px solid var(--rule);
+      color: var(--ink-mid);
+      vertical-align: top;
+    }
+    .interop tr:last-child td { border-bottom: none; }
+    .interop td:not(:first-child) {
+      font-family: var(--mono);
+      font-size: 0.79rem;
+    }
+    .interop td:first-child { width: 32%; }
+
+    .same { color: var(--ink-faint); font-style: italic; }
+
+    /* ── TESS badge ────────────────────────────────────────────────── */
+    .tess-badge {
+      display: inline-block;
+      font-family: var(--mono);
+      font-size: 0.65rem;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      background: var(--ink);
+      color: var(--bg);
+      padding: 0.2em 0.7em;
+      margin-bottom: 1.2rem;
+    }
+
+    /* ── Inline color refs ─────────────────────────────────────────── */
+    .c-tag { color: var(--tag-red); font-family: var(--mono); font-size: 0.9em; }
+    .c-kw  { color: var(--kw-green); font-family: var(--mono); font-size: 0.9em; }
+
+    /* ── Manifesto (dark closing section) ──────────────────────────── */
+    .manifesto {
+      background: var(--dark-bg);
+      border-top: none;
+    }
+    .manifesto .wrap { padding-top: 6rem; padding-bottom: 6rem; }
+    .manifesto .eyebrow { color: var(--dark-mid); }
+    .manifesto .rule-accent { background: var(--dark-faint); }
+    .manifesto h2 { color: var(--dark-ink); }
+    .manifesto p  { color: var(--dark-mid); }
+    .manifesto strong { color: var(--dark-ink); }
+    .manifesto code {
+      background: #2C2920;
+      color: var(--dark-ink);
+    }
+    .manifesto .callout {
+      border-top-color: var(--dark-mid);
+      border-bottom-color: var(--dark-rule);
+    }
+    .manifesto .callout p { color: var(--dark-ink); }
+
+    /* ── Footer ────────────────────────────────────────────────────── */
+    footer {
+      background: var(--dark-bg);
+      border-top: 1px solid var(--dark-rule);
+      padding: 2.5rem 0;
+      text-align: center;
+    }
+    footer p {
+      font-family: var(--mono);
+      font-size: 0.66rem;
+      letter-spacing: 0.12em;
+      color: var(--dark-faint);
+    }
+    footer p + p { margin-top: 0.5rem; }
+    footer a { color: var(--dark-mid); text-decoration: underline; text-underline-offset: 3px; }
+    footer a:hover { color: var(--dark-ink); }
+
+    /* ── Screenshots ───────────────────────────────────────────────── */
+    figure.screenshot {
+      margin: 2.5rem 0;
+      border: 1px solid var(--rule);
+      overflow: hidden;
+    }
+    figure.screenshot img {
+      width: 100%;
+      display: block;
+    }
+    figure.screenshot figcaption {
+      background: var(--rule);
+      padding: 0.45rem 1rem;
+      font-family: var(--mono);
+      font-size: 0.68rem;
+      letter-spacing: 0.04em;
+      color: var(--ink-mid);
+    }
+
+    /* ── Responsive ────────────────────────────────────────────────── */
+    @media (max-width: 600px) {
+      html { font-size: 16px; }
+      .wm-tiles { font-size: 3.4rem; }
+      .wm-tess  { font-size: 2.1rem; }
+      .wm-amp   { font-size: 1.6rem; }
+      .hero     { padding: 6rem 0 5rem; }
+      section   { padding: 3.5rem 0; }
+      h2        { font-size: 1.6rem; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ── HERO ──────────────────────────────────────────────────────────── -->
+<header class="hero">
+  <div class="wrap">
+    <p class="hero-eyebrow">Plain-text note-taking for Emacs &amp; desktop</p>
+    <div class="wordmark">
+      <span class="wm-tiles">TILES</span>
+      <span class="wm-amp">&amp;</span>
+      <span class="wm-tess">TESS</span>
+    </div>
+    <p class="hero-statement">Every note is a file. Ideally, just one paragraph.<br>Just paragraphs and tags.<br>And maybe keywords, if you want.</p>
+    <div class="pills">
+      <span class="pill">Plain text</span>
+      <span class="pill">No hierarchy</span>
+      <span class="pill">No backlinks</span>
+      <span class="pill">No graph</span>
+      <span class="pill">Org format</span>
+      <span class="pill">GPL-3.0</span>
+    </div>
+  </div>
+</header>
+
+
+<!-- ── CORE CONCEPT ──────────────────────────────────────────────────── -->
+<section>
+  <div class="wrap">
+    <p class="eyebrow">Core Concept</p>
+    <div class="rule-accent"></div>
+    <h2>Notes are paragraphs, not documents</h2>
+
+    <p>Most note-taking systems ask you to <em>file</em> things. Before you can write a note, you need to decide what it belongs to: which notebook, which folder, which page, which parent node. That decision is often wrong, and it costs time you did not have when the thought arrived.</p>
+
+    <p>TILES and TESS ask you to make no such decision. Each note is a single paragraph — one idea, one observation, one moment of thinking — stored as its own <code>.org</code> file. The filename is a timestamp. The last line is a list of tags. Any <strong>bold word</strong> in the text becomes a searchable keyword. That is the complete system.</p>
+
+    <p>You retrieve notes by what they are <em>about</em>, not by where you put them. Tags give you broad categories. Keywords give you fine-grained content retrieval. A note about the economics of rocket reusability sits in no folder; it is found by searching <span class="c-kw">launch costs</span> or filtering by <span class="c-tag">aerospace</span>.</p>
+
+    <div class="callout">
+      <p>"You do not need to decide where a note belongs before you can write it."</p>
+    </div>
+
+    <p>The vault is a directory of plain files. Sync it with any tool. Version it with <code>git</code>. Open it in Finder, grep through it in the terminal, edit a file in any text editor. Nothing breaks. Nothing needs to be migrated.</p>
+  </div>
+</section>
+
+
+<!-- ── NOTE FORMAT ───────────────────────────────────────────────────── -->
+<section>
+  <div class="wrap">
+    <p class="eyebrow">Note Format</p>
+    <div class="rule-accent"></div>
+    <h2>One file, one thought</h2>
+
+    <p>A tile is a plain <code>.org</code> file. The name encodes when it was written. The structure has three parts: content, an optional blank line, and a tag line.</p>
+
+    <div class="note-file">
+      <div class="note-file-bar">
+        <span>T20260604143022.org</span>
+        <span>vault/</span>
+      </div>
+      <div class="note-file-body">The <span class="n-kw">*Falcon 9*</span> booster recovery program changed the economics of <span class="n-kw">*launch costs*</span> more than any single engineering advance. Reusability meant the marginal cost of a launch fell below what <span class="n-kw">*expendable rockets*</span> could ever reach structurally.
+<span class="n-prv">&amp;&amp; first heard this framing from a Berger piece — revisit for source</span>
+
+<span class="n-tag">aerospace/economics/spacex</span></div>
+    </div>
+
+    <p>The <span class="c-kw">bold phrases</span> — <code>*Falcon 9*</code>, <code>*launch costs*</code>, <code>*expendable rockets*</code> — are extracted as searchable keywords. Hyphens in bold phrases normalize to spaces at match time, so <code>*Falcon-9*</code> and <code>*Falcon 9*</code> are the same keyword. The note itself is never modified by this process.</p>
+
+    <p>Lines beginning with <code>&amp;&amp;</code> are <strong>private paragraphs</strong>: present in the file, stripped from all previews, search panels, stitched views, and exports. Useful for source notes, personal context, or reminders you do not want surfaced in results.</p>
+
+    <p>The <span class="c-tag">tag line</span> is always the last non-empty line, slash-separated. Tags are free-form strings — there is no tag registry, no hierarchy, no required structure.</p>
+  </div>
+</section>
+
+
+<!-- ── TILES ─────────────────────────────────────────────────────────── -->
+<section>
+  <div class="wrap">
+    <p class="eyebrow">TILES — Emacs Package</p>
+    <div class="rule-accent"></div>
+    <h2>The Emacs interface</h2>
+    <p style="font-family: var(--mono); font-size: 0.75rem; letter-spacing: 0.08em; color: var(--ink-faint); margin-bottom: 1.8rem; margin-top: -0.8rem;"><strong style="color: var(--ink-mid);">T</strong>agged <strong style="color: var(--ink-mid);">I</strong>nstant <strong style="color: var(--ink-mid);">L</strong>ightweight <strong style="color: var(--ink-mid);">E</strong>macs <strong style="color: var(--ink-mid);">S</strong>nippets</p>
+
+    <p>TILES is a single-file Emacs Lisp package (<code>tiles.el</code>). No build system, no external dependencies beyond Emacs itself and the built-in <code>org</code>, <code>lunar</code>, and <code>filenotify</code> libraries. Install it by loading the file; evaluate the buffer to test changes.</p>
+
+    <p>Notes are stored in <code>~/notes/tiles/</code> by default and loaded recursively, so you can arrange files in subdirectories freely — or let them all sit flat. Year-based subfolders are opt-in (<code>tiles-year-subfolders</code>).</p>
+
+    <h3>Dashboard</h3>
+    <p>The dashboard (<code>C-c m m</code>) lists all notes newest-first. Timestamps are color-coded by age: today in green, recent in muted green, older in gray. Each line shows a one-line preview stripped of org markup. The header shows a moon phase countdown (days to next new or full moon) and any active filter state.</p>
+
+    <table class="kb">
+      <thead>
+        <tr><th style="width:14ch">Key</th><th>Action</th></tr>
+      </thead>
+      <tbody>
+        <tr><td class="key">n &nbsp;/&nbsp; p</td><td>Next / previous note</td></tr>
+        <tr><td class="key">SPC</td><td>Open preview split; updates automatically as you navigate</td></tr>
+        <tr><td class="key">RET</td><td>Open note for editing</td></tr>
+        <tr><td class="key">M-RET</td><td>Open read-only; <code>m</code> appends similar notes inline</td></tr>
+        <tr><td class="key">TAB</td><td>Expand: show private paragraphs, keywords, file stats</td></tr>
+        <tr><td class="key">t &nbsp;/&nbsp; k</td><td>Filter by tag / keyword</td></tr>
+        <tr><td class="key">F</td><td>Exclude notes with a given tag</td></tr>
+        <tr><td class="key">T &nbsp;/&nbsp; K</td><td>Browse all tags / keywords with counts</td></tr>
+        <tr><td class="key">0</td><td>Stitch displayed notes into a single org buffer</td></tr>
+        <tr><td class="key">l</td><td>New note (opens in focus mode)</td></tr>
+        <tr><td class="key">w &nbsp;/&nbsp; W</td><td>Copy note to clipboard — <code>w</code> preserves org markup; <code>W</code> strips it to plain text</td></tr>
+        <tr><td class="key">u</td><td>Touch — rename file to current timestamp</td></tr>
+        <tr><td class="key">d &nbsp;/&nbsp; D</td><td>Rename date / Delete note</td></tr>
+        <tr><td class="key">g</td><td>Refresh dashboard (preserves selection)</td></tr>
+      </tbody>
+    </table>
+
+    <figure class="screenshot">
+      <img src="tiles-dashboard.png" alt="TILES dashboard in Emacs showing notes listed newest-first with green timestamps and red tags">
+      <figcaption>TILES dashboard — 275 notes, filtered to 50 per page. Yellow line = selected note.</figcaption>
+    </figure>
+
+    <h3>Capture</h3>
+    <p>New notes open in a capture minor mode over org-mode. Write freely; <code>C-c C-c</code> saves, <code>C-c C-k</code> cancels. The file is named from the current timestamp. Focus mode centers the buffer at ~80 characters with soft word-wrap.</p>
+    <p>For notes you want to record without breaking flow: <code>C-c m q</code> prompts in the minibuffer, <code>C-c m y</code> pre-fills content from the clipboard. Both bypass the full buffer entirely.</p>
+
+    <figure class="screenshot">
+      <img src="tiles-note.png" alt="A single TILES note open in Emacs focus mode, showing content and red tag line">
+      <figcaption>A note open in focus mode — centered at ~80 characters, tag line in red.</figcaption>
+    </figure>
+
+    <h3>Search</h3>
+    <p>Tag and keyword search both operate against a persistent reverse index built at startup — O(matching files), not a linear scan. The query grammar is compact:</p>
+
+    <div class="qblock">
+      <div class="qlabel">Tag search</div>
+      <div class="qline">aerospace</div>
+      <div class="qcomment">   — notes tagged aerospace</div>
+      <div class="qline">aerospace spacex</div>
+      <div class="qcomment">   — tagged aerospace OR spacex</div>
+      <div class="qline">aerospace/economics</div>
+      <div class="qcomment">   — tagged aerospace AND economics</div>
+    </div>
+
+    <div class="qblock">
+      <div class="qlabel">Keyword search</div>
+      <div class="qline">launch costs</div>
+      <div class="qcomment">   — contains keyword "launch costs"</div>
+      <div class="qline">launch costs/reusability</div>
+      <div class="qcomment">   — contains both keywords (AND)</div>
+      <div class="qline">falcon 9 !expendable</div>
+      <div class="qcomment">   — contains "falcon 9", excludes "expendable"</div>
+    </div>
+
+    <p>Results open in a two-panel view — navigable file list on top, live org preview below. <code>SPC</code> switches to a stitched view: all matching note contents concatenated in a single scrollable org buffer, tag lines and private paragraphs removed.</p>
+
+    <h3>Similar notes</h3>
+    <p>From any note open read-only (<code>M-RET</code> from the dashboard), pressing <code>m</code> appends the top-5 most similar notes inline. Similarity is TF-IDF over content tokens; bold keywords in the target note receive a 3× weight boost. Pressing <code>m</code> again hides the block.</p>
+
+    <h3>Tag and keyword lists</h3>
+    <p><code>T</code> and <code>K</code> in the dashboard open browsable lists of all tags or keywords with occurrence counts. Both support sorting by alphabet or frequency. <code>R</code> renames the tag or keyword under point across all matching files in the vault.</p>
+  </div>
+</section>
+
+
+<!-- ── TESS ───────────────────────────────────────────────────────────── -->
+<section>
+  <div class="wrap">
+    <p class="eyebrow">TESS — Electron Companion</p>
+    <div class="rule-accent"></div>
+    <span class="tess-badge">Temporal Entry Stitch System</span>
+    <h2>The desktop GUI</h2>
+
+    <p>You don't use Emacs? Maybe you find it intimidating, or you're one of those people that uses <em>the other editor</em>? TESS is a small, fast Electron desktop application for the same vault format. It is not a port of TILES — it is a different entry point to the same files, designed for when you want a native window rather than an editor extension.</p>
+
+    <figure class="screenshot">
+      <img src="tess-screenshot.png" alt="TESS desktop app showing a card grid of notes with a capture box at the top">
+      <figcaption>TESS — card grid view, capture box at top, tag-filtered pages.</figcaption>
+    </figure>
+
+    <p>Open your vault in TESS in the morning. Capture notes in TILES during an Emacs session in the afternoon. Sync the vault with <code>rsync</code> or <code>git</code> in between. The vault is indifferent to which tool last touched it.</p>
+
+    <p>TESS recognizes the same <code>&amp;&amp;</code> private-paragraph convention, the same slash-delimited tag line, and the same <code>*bold*</code> keyword extraction. It additionally supports <code>.md</code> and <code>.txt</code> extensions alongside <code>.org</code>. Fonts can be loaded from a local <code>fonts/</code> directory or from system-installed fonts, switchable in Settings.</p>
+
+    <p>TESS ships source only — no prebuilt binaries in the repository. Build locally:</p>
+
+    <div class="qblock">
+      <div class="qline">npm install &amp;&amp; npm start</div>
+      <div class="qcomment">   — run from source</div>
+      <div class="qline">npm run dist</div>
+      <div class="qcomment">   — build macOS .dmg</div>
+      <div class="qline">npm run dist:win</div>
+      <div class="qcomment">   — build Windows portable .exe</div>
+    </div>
+
+    <p>On first run, use <strong>File → Open Vault…</strong> to point TESS at your tiles directory.</p>
+  </div>
+</section>
+
+
+<!-- ── INTEROP TABLE ─────────────────────────────────────────────────── -->
+<section>
+  <div class="wrap">
+    <p class="eyebrow">Interoperability</p>
+    <div class="rule-accent"></div>
+    <h2>One vault, two tools</h2>
+    <p>The on-disk format is the contract. Both tools implement it identically; everything else is a difference of environment and interface.</p>
+
+    <table class="interop">
+      <thead>
+        <tr>
+          <th></th>
+          <th>TILES</th>
+          <th>TESS</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Platform</td>
+          <td>Emacs (any OS)</td>
+          <td>Electron — macOS, Windows</td>
+        </tr>
+        <tr>
+          <td>Vault format</td>
+          <td>T&lt;timestamp&gt;.org</td>
+          <td>T&lt;timestamp&gt;.org | .md | .txt</td>
+        </tr>
+        <tr>
+          <td>Tag line</td>
+          <td>last non-empty line, /&#8209;separated</td>
+          <td class="same">same</td>
+        </tr>
+        <tr>
+          <td>Keywords</td>
+          <td>*bold* words extracted on parse</td>
+          <td class="same">same</td>
+        </tr>
+        <tr>
+          <td>Private lines</td>
+          <td>&amp;&amp; prefix — stripped at display</td>
+          <td class="same">same</td>
+        </tr>
+        <tr>
+          <td>Live sync</td>
+          <td>file-notify watches on vault dirs</td>
+          <td>—</td>
+        </tr>
+        <tr>
+          <td>Persistent cache</td>
+          <td>~/.emacs.d/tiles-cache.el</td>
+          <td>—</td>
+        </tr>
+        <tr>
+          <td>Similar / related notes</td>
+          <td>TF-IDF, keyword-boosted</td>
+          <td>&#10003;</td>
+        </tr>
+        <tr>
+          <td>Org dynamic blocks</td>
+          <td>tiles-notes, tiles-files</td>
+          <td>—</td>
+        </tr>
+        <tr>
+          <td>License</td>
+          <td>GPL-3.0</td>
+          <td>GPL-3.0</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+
+<!-- ── MANIFESTO ─────────────────────────────────────────────────────── -->
+<section class="manifesto">
+  <div class="wrap">
+    <p class="eyebrow">Why plain text</p>
+    <div class="rule-accent"></div>
+    <h2>The file is the format</h2>
+
+    <p>Graph-based and wiki-style systems solve a real problem — the feeling that notes are disconnected — by building a layer of metadata on top of the text. Backlinks, embedded queries, block references, hierarchical namespaces: each feature is infrastructure that your knowledge depends on to stay coherent. When the infrastructure changes, the knowledge has to migrate with it.</p>
+
+    <p>TILES and TESS make a different bet. The problem is not that notes are disconnected. The problem is that <strong>retrieval is hard</strong>. Tags and keywords solve retrieval. They do not require notes to reference each other. They do not break when a note is renamed. They do not produce a graph that needs to be maintained. They leave the files fully readable in any text editor, forever.</p>
+
+    <div class="callout">
+      <p>"A plain-text file from 2004 opens perfectly today. The same cannot be said for any application's proprietary format."</p>
+    </div>
+
+    <p>The vault is a directory. Back it up however you back up files. Version it with <code>git</code>. Grep through it in the terminal. Copy it between machines. It does not require a running server, a sync daemon, a browser tab, or a paid account to stay accessible.</p>
+
+    <p>The tools that read the vault today — TILES, TESS, any editor, any future tool — are interchangeable at the file boundary. The knowledge outlives the software.</p>
+  </div>
+</section>
+
+
+<!-- ── FOOTER ────────────────────────────────────────────────────────── -->
+<footer>
+  <div class="wrap">
+    <p>TILES (Emacs package) &nbsp;·&nbsp; TESS (Electron desktop) &nbsp;·&nbsp; GPL-3.0</p>
+    <p><a href="https://github.com/ctanas/tiles">github.com/ctanas/tiles</a> &nbsp;·&nbsp; <a href="https://github.com/ctanas/tess">github.com/ctanas/tess</a></p>
+  </div>
+</footer>
+
+</body>
+</html>
