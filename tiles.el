@@ -198,9 +198,30 @@
 (require 'org)
 (require 'lunar)
 (require 'face-remap)
+(require 'url-parse)
+(require 'mailcap)
+
+;; Warcel (WARC web archives) lives in the warcel/ subdirectory until it
+;; is folded into TILES.  It needs Emacs 29.1; TILES works without it.
+(eval-and-compile
+  (let ((dir (expand-file-name
+              "warcel"
+              (file-name-directory
+               (or load-file-name
+                   (bound-and-true-p byte-compile-current-file)
+                   buffer-file-name)))))
+    (when (file-directory-p dir)
+      (add-to-list 'load-path dir))))
+(when (>= emacs-major-version 29)
+  (require 'warcel nil t))
 
 (declare-function file-notify-add-watch "filenotify" (file flags callback))
 (declare-function file-notify-rm-watch "filenotify" (descriptor))
+(declare-function warcel-archived-urls "warcel" (file))
+(declare-function warcel-canonical-url "warcel" (url))
+(declare-function warcel-capture-in-background "warcel" (url file &optional callback))
+(declare-function warcel-open "warcel" (file &optional list))
+(defvar warcel-capture-compress)
 
 (defconst tiles-version "0.5.2"
   "Current version of TILES.")
@@ -255,10 +276,20 @@ Uses ═ and ─ instead of = and -.  Set to nil for plain ASCII."
   :group 'tiles)
 
 (defcustom tiles-year-subfolders nil
-  "When non-nil, save new notes in a per-year subfolder inside `tiles-directory'.
-For example, a note created in 2026 is saved to TILES-DIR/2026/.
-Existing notes in any location are always found (loading is always recursive)."
-  :type 'boolean
+  "Subfolder layout for notes inside `tiles-directory'.
+When nil, new notes are saved directly in `tiles-directory'.
+When t, they go in a per-year subfolder: a note created in 2026 is
+saved to TILES-DIR/2026/.
+When a string, it is a `format-time-string' template applied to the
+note's timestamp.  For example \"%Y/%m\" saves a note created in
+September 2026 to TILES-DIR/2026/09/.
+When non-nil, changing a note's date (`tiles-touch', `u' and `d' in the
+dashboard) also moves it to the subfolder matching its new date.
+Existing notes in any location are always found (loading is always
+recursive)."
+  :type '(choice (const :tag "No subfolders" nil)
+                 (const :tag "Per year (YYYY/)" t)
+                 (string :tag "Format string, e.g. \"%Y/%m\""))
   :group 'tiles)
 
 (defcustom tiles-cache-file
@@ -313,6 +344,36 @@ has any of these tags will not get an HTML anchor."
   :type '(repeat string)
   :group 'tiles)
 
+(defcustom tiles-archive-urls nil
+  "When non-nil, archive the web pages that notes link to.
+Each time a note is saved, the http and https links in it that are not
+archived yet are fetched in the background and saved with warcel, one
+WARC file per link.  The files go in the warc/ folder of
+`tiles-directory', in the same subfolders as the notes, and are named
+after the note with letters added: the links of T20260924101500.org
+are saved in T20260924101500a.warc.gz, T20260924101500b.warc.gz, and so
+on.  Pages that fail to download are tried again the next time the
+note is saved.  Links to `tiles-archive-exclude-hosts' are skipped.
+Needs warcel, which TILES loads on Emacs 29.1 or later."
+  :type 'boolean
+  :group 'tiles)
+
+(defcustom tiles-archive-exclude-hosts nil
+  "Host names whose pages `tiles-archive-urls' does not archive.
+A host name also covers its subdomains: \"example.com\" excludes
+links to www.example.com as well."
+  :type '(repeat string)
+  :group 'tiles)
+
+(defcustom tiles-archive-exclude-file-types nil
+  "File types that `tiles-archive-urls' does not archive.
+They are given as file name extensions, such as \"pdf\".  A link whose
+URL ends in one of them is not downloaded at all; any other link is
+not saved if the server says it is a file of one of these types, and
+it is not downloaded again for the rest of the Emacs session."
+  :type '(repeat string)
+  :group 'tiles)
+
 ;;; Internal Variables
 
 (defvar tiles--current-search-results nil
@@ -350,6 +411,29 @@ Used to remove a file cleanly from `tiles--tag-index' and
 
 (defvar tiles--file-watches nil
   "Alist of (DIR . DESCRIPTOR) for active `file-notify' watches.")
+
+(defvar tiles--archive-queue nil
+  "Links waiting to be archived, oldest first.
+Each element is a cons (NOTE . URL), NOTE being the note's filepath.")
+
+(defvar tiles--archive-current nil
+  "The (NOTE . URL) link being archived, or nil.")
+
+(defvar tiles--archive-results (make-hash-table :test 'equal)
+  "Results so far of the notes whose links are being archived.
+Maps a note's filepath to (ARCHIVED . NOT-ARCHIVED), the number of its
+links archived and a list of (URL . REASON) for the others, until its
+summary is shown.")
+
+(defvar tiles--archive-skipped (make-hash-table :test 'equal)
+  "Links found to be of a type in `tiles-archive-exclude-file-types'.
+Maps each URL to its media type, so it is not downloaded again during
+the session.")
+
+(defvar tiles--archive-idle-delay 1
+  "Seconds Emacs must be idle before the download of a link starts.
+Looking up the host name of a link can pause Emacs briefly, so it waits
+for a pause in typing.")
 
 (defvar tiles-debug nil
   "When non-nil, display performance diagnostics after each dashboard load.
@@ -447,16 +531,48 @@ Uses Emacs's built-in lunar phase computation."
   (unless (file-exists-p tiles-directory)
     (make-directory tiles-directory t)))
 
-(defun tiles--note-save-directory ()
-  "Return the directory where new notes should be saved.
-When `tiles-year-subfolders' is non-nil, returns a YYYY subfolder inside
-`tiles-directory', creating it if needed.  Otherwise returns `tiles-directory'."
-  (if tiles-year-subfolders
-      (let ((dir (expand-file-name (format-time-string "%Y") tiles-directory)))
-        (unless (file-exists-p dir)
-          (make-directory dir t))
-        dir)
-    (expand-file-name tiles-directory)))
+(defun tiles--filename-to-time (filename)
+  "Return the local time encoded in FILENAME (TYYYYMMDDHHMMSS.org), or nil."
+  (when (string-match "T\\([0-9]\\{4\\}\\)\\([0-9]\\{2\\}\\)\\([0-9]\\{2\\}\\)\\([0-9]\\{2\\}\\)\\([0-9]\\{2\\}\\)\\([0-9]\\{2\\}\\)" filename)
+    (encode-time (append (mapcar (lambda (i) (string-to-number (match-string i filename)))
+                                 '(6 5 4 3 2 1))
+                         '(nil -1 nil)))))
+
+(defun tiles--note-filepath (filename &optional current)
+  "Return the full path where the note named FILENAME belongs.
+When `tiles-year-subfolders' is non-nil, that is the subfolder of
+`tiles-directory' matching the timestamp in FILENAME.  Otherwise it is
+the directory of CURRENT (the note's existing path) or, for a new
+note, `tiles-directory'."
+  (let ((time (and tiles-year-subfolders (tiles--filename-to-time filename))))
+    (expand-file-name
+     filename
+     (cond (time (expand-file-name
+                  (format-time-string (if (stringp tiles-year-subfolders)
+                                          tiles-year-subfolders
+                                        "%Y")
+                                      time)
+                  tiles-directory))
+           (current (file-name-directory current))
+           (t (expand-file-name tiles-directory))))))
+
+(defun tiles--new-note-filepath ()
+  "Return an unused path for a new note, creating its directory if needed."
+  (let ((filepath (tiles--note-filepath (tiles--generate-filename))))
+    (while (file-exists-p filepath)
+      (sleep-for 0.1)
+      (setq filepath (tiles--note-filepath (tiles--generate-filename))))
+    (make-directory (file-name-directory filepath) t)
+    filepath))
+
+(defun tiles--rename-note (filepath new-filepath)
+  "Rename note FILEPATH to NEW-FILEPATH and evict the old path from the cache.
+Creates the directory of NEW-FILEPATH if needed.  The web archives of
+the note are renamed with it."
+  (make-directory (file-name-directory new-filepath) t)
+  (rename-file filepath new-filepath)
+  (tiles--evict-file filepath)
+  (tiles--archive-rename filepath new-filepath))
 
 (defun tiles--generate-timestamp ()
   "Generate a timestamp string for file naming."
@@ -470,7 +586,10 @@ When `tiles-year-subfolders' is non-nil, returns a YYYY subfolder inside
   "Get all tile files from `tiles-directory' and subdirectories.
 Returned list is sorted newest first."
   (when (file-exists-p tiles-directory)
-    (let ((files (directory-files-recursively tiles-directory "^T[0-9]\\{14\\}\\.org$")))
+    (let ((files (directory-files-recursively
+                  tiles-directory "^T[0-9]\\{14\\}\\.org$" nil
+                  ;; Do not even list the web archives: they hold no notes.
+                  (lambda (dir) (not (tiles--archive-path-p dir))))))
       (sort files (lambda (a b)
                     (string> (file-name-nondirectory a)
                              (file-name-nondirectory b)))))))
@@ -526,20 +645,40 @@ Everything before it (minus the trailing blank separator) is content."
               :keywords keywords
               :filepath filepath)))))
 
-(defun tiles-clear-cache ()
-  "Clear the tiles note cache and reverse index.
-Removes the persistent cache file as well."
-  (interactive)
+(defun tiles--clear-memory-cache ()
+  "Empty the in-memory note cache and reverse indices."
   (clrhash tiles--cache)
   (clrhash tiles--tag-index)
   (clrhash tiles--keyword-index)
   (clrhash tiles--file-index-record)
   (clrhash tiles--content-token-cache)
-  (setq tiles--index-complete nil)
+  (setq tiles--index-complete nil))
+
+(defun tiles-clear-cache ()
+  "Clear the tiles note cache and reverse index.
+Removes the persistent cache file as well."
+  (interactive)
+  (tiles--clear-memory-cache)
   (setq tiles--cache-loaded nil)
   (when (and tiles-cache-file (file-exists-p tiles-cache-file))
     (delete-file tiles-cache-file))
   (message "Tiles cache cleared"))
+
+;;;###autoload
+(defun tiles-rescan ()
+  "Rescan `tiles-directory' from scratch.
+Re-reads every note, rebuilds the tag and keyword indices, and
+re-installs the file watches so folders created since the last scan
+are watched too.  Use it after moving or editing many notes outside
+Emacs.  Refreshes the dashboard when called from it."
+  (interactive)
+  (tiles--clear-memory-cache)
+  ;; Skip the persistent cache: it may still list notes at their old paths.
+  (setq tiles--cache-loaded t)
+  (tiles--ensure-index)
+  (when (string= (buffer-name) tiles--notes-buffer-name)
+    (tiles-show-notes))
+  (message "Tiles: rescanned %d notes" (hash-table-count tiles--cache)))
 
 ;;; Reverse index, persistent cache, and file-notify
 
@@ -721,15 +860,21 @@ AND within each group, OR across groups; `!'-prefixed terms negate."
                    (file-name-nondirectory b)))))
 
 (defun tiles--watched-directories ()
-  "Return the list of directories that should be watched for changes."
-  (let ((root (expand-file-name tiles-directory))
+  "Return the list of directories that should be watched for changes.
+That is `tiles-directory', every directory containing tile files, and
+every directory in between (e.g. YYYY/ for notes in YYYY/MM/), so a
+new subfolder created inside one of them is noticed."
+  (let ((root (directory-file-name (expand-file-name tiles-directory)))
         dirs)
     (when (file-exists-p root)
       (push root dirs)
       (dolist (file (tiles--get-all-tile-files))
-        (let ((dir (directory-file-name (file-name-directory file))))
-          (unless (member dir dirs)
-            (push dir dirs)))))
+        (let ((dir (directory-file-name
+                    (file-name-directory (expand-file-name file)))))
+          (while (and (not (member dir dirs))
+                      (string-prefix-p root dir))
+            (push dir dirs)
+            (setq dir (directory-file-name (file-name-directory dir)))))))
     dirs))
 
 (defun tiles--start-file-watch ()
@@ -771,17 +916,26 @@ Replaces any watches installed by a previous call."
       (when (tiles--tile-file-p file2)
         (remhash file2 tiles--cache)
         (when (file-exists-p file2)
-          (tiles--parse-note-file file2))))
+          (tiles--parse-note-file file2)
+          (tiles--archive-note-later file2))))
      ((memq action '(changed attribute-changed))
       (when (tiles--tile-file-p file)
-        (remhash file tiles--cache)))
+        (remhash file tiles--cache)
+        (when (eq action 'changed)
+          (tiles--archive-note-later file))))
      ((eq action 'created)
       (cond
        ((tiles--tile-file-p file)
         (when (file-exists-p file)
-          (tiles--parse-note-file file)))
-       ((and file (file-directory-p file))
-        (setq tiles--index-complete nil)))))))
+          (tiles--parse-note-file file)
+          (tiles--archive-note-later file)))
+       ;; A new folder may hold notes, but the web archives never do.
+       ((and file (file-directory-p file) (not (tiles--archive-path-p file)))
+        (setq tiles--index-complete nil)
+        ;; It is not watched yet, so look at the notes it came with.
+        (when tiles-archive-urls
+          (dolist (note (directory-files-recursively file "^T[0-9]\\{14\\}\\.org$"))
+            (tiles--archive-note-later note)))))))))
 
 (add-hook 'kill-emacs-hook #'tiles--save-disk-cache)
 
@@ -905,6 +1059,557 @@ Checks that the last non-empty line is a tag line preceded by a blank line."
       "Tags must be preceded by a blank line")
      (t t))))
 
+;;; Link archiving
+
+(defun tiles--archive-directory ()
+  "Return the directory holding the web archives of linked pages."
+  (expand-file-name "warc" tiles-directory))
+
+(defun tiles--archive-path-p (path)
+  "Return non-nil if PATH is `tiles--archive-directory' or inside it."
+  (string-prefix-p (file-name-as-directory (tiles--archive-directory))
+                   (file-name-as-directory (expand-file-name path))))
+
+(defun tiles--note-archive-directory (note)
+  "Return the directory for the web archives of NOTE, or nil.
+It mirrors, inside `tiles--archive-directory', the folder where NOTE
+belongs (see `tiles--note-filepath'): warc/2026/09/ for a note of
+September 2026 when `tiles-year-subfolders' is \"%Y/%m\", even while
+the note is elsewhere, as when sync moves it.  Return nil if NOTE is
+not in `tiles-directory'."
+  (let* ((root (expand-file-name tiles-directory))
+         (note (expand-file-name note))
+         (relative (file-relative-name (file-name-directory note) root)))
+    (unless (or (string-prefix-p "../" relative)
+                (file-name-absolute-p relative))
+      (let ((home (file-name-directory
+                   (tiles--note-filepath (file-name-nondirectory note) note))))
+        (file-name-as-directory
+         (expand-file-name (file-relative-name home root) (tiles--archive-directory)))))))
+
+(defun tiles--archive-suffix (n)
+  "Return the letters added to the name of a note for its Nth web archive.
+N counts from 0: the letters are a to z, then aa, ab, and so on."
+  (let ((suffix ""))
+    (setq n (1+ n))
+    (while (> n 0)
+      (setq n (1- n)
+            suffix (concat (string (+ ?a (% n 26))) suffix)
+            n (/ n 26)))
+    suffix))
+
+(defun tiles--note-archives (note)
+  "Return the web archive files of NOTE."
+  (let ((dir (tiles--note-archive-directory note)))
+    (when (and dir (file-directory-p dir))
+      (directory-files dir t (concat "\\`" (regexp-quote (file-name-base note))
+                                     "[a-z]+\\.warc\\(?:\\.gz\\)?\\'")))))
+
+(defun tiles--new-archive-file (note)
+  "Return the file for a new web archive of NOTE, or nil.
+It is named after NOTE, with the first unused suffix letters."
+  (when-let* ((dir (tiles--note-archive-directory note)))
+    (let ((base (expand-file-name (file-name-base note) dir))
+          (n 0))
+      (while (let ((suffix (tiles--archive-suffix n)))
+               (or (file-exists-p (concat base suffix ".warc"))
+                   (file-exists-p (concat base suffix ".warc.gz"))))
+        (setq n (1+ n)))
+      (concat base (tiles--archive-suffix n)
+              (if (bound-and-true-p warcel-capture-compress) ".warc.gz" ".warc")))))
+
+(defun tiles--note-urls (content)
+  "Return the http and https URLs linked from CONTENT, without duplicates.
+Both Org bracket links and plain URLs count.  They are returned in the
+order they appear in CONTENT."
+  (with-temp-buffer
+    (insert content)
+    (let (found)
+      (goto-char (point-min))
+      (while (re-search-forward "\\[\\[\\(https?://[^][]+\\)\\]" nil t)
+        (push (cons (match-beginning 0) (match-string-no-properties 1)) found)
+        ;; Hide the link from the search for plain URLs below.
+        (replace-match (make-string (- (match-end 0) (match-beginning 0)) ?\s) t t))
+      (goto-char (point-min))
+      (while (re-search-forward "https?://[^][ \t\n<>\"]+" nil t)
+        (let ((url (match-string-no-properties 0)))
+          ;; Leave out the punctuation that follows a URL in a sentence.
+          (while (or (string-match-p "[.,;:!?'\"]\\'" url)
+                     (and (string-suffix-p ")" url)
+                          (not (string-match-p "(" url))))
+            (setq url (substring url 0 -1)))
+          (push (cons (match-beginning 0) url) found)))
+      (delete-dups (mapcar #'cdr (sort found (lambda (a b) (< (car a) (car b)))))))))
+
+(defun tiles--archive-excluded-p (url)
+  "Return non-nil if the page at URL is not to be archived.
+That is if URL is on a host in `tiles-archive-exclude-hosts', or ends
+in an extension in `tiles-archive-exclude-file-types'."
+  (let* ((parsed (url-generic-parse-url url))
+         (host (downcase (or (url-host parsed) "")))
+         (path (car (url-path-and-query parsed)))
+         (extension (and path (file-name-extension path))))
+    (or (seq-some (lambda (excluded)
+                    (let ((excluded (downcase excluded)))
+                      (or (string= host excluded)
+                          (string-suffix-p (concat "." excluded) host))))
+                  tiles-archive-exclude-hosts)
+        (and extension
+             (member-ignore-case extension tiles-archive-exclude-file-types)
+             t))))
+
+(defun tiles--archive-excluded-type-p (type)
+  "Return non-nil if the media TYPE is in `tiles-archive-exclude-file-types'."
+  (seq-some (lambda (extension)
+              (equal type (mailcap-extension-to-mime (concat "." extension))))
+            tiles-archive-exclude-file-types))
+
+(defun tiles--note-pending-urls (note)
+  "Return the URLs linked from NOTE that still need to be archived.
+They are the links to archive, in the form `warcel-canonical-url'
+gives, minus those archived already or queued for NOTE.  Needs
+warcel."
+  (when (and (tiles--tile-file-p note)
+             (file-exists-p note)
+             (tiles--note-archive-directory note))
+    (let* ((note (expand-file-name note))
+           (urls (seq-remove
+                  #'tiles--archive-excluded-p
+                  (delete-dups
+                   (delq nil (mapcar (lambda (url)
+                                       (ignore-errors (warcel-canonical-url url)))
+                                     (tiles--note-urls
+                                      (with-temp-buffer
+                                        (insert-file-contents note)
+                                        (buffer-string)))))))))
+      (when urls
+        (let ((known (append (mapcan (lambda (file)
+                                       (ignore-errors (warcel-archived-urls file)))
+                                     (tiles--note-archives note))
+                             (mapcar #'cdr (seq-filter (lambda (job)
+                                                         (equal (car job) note))
+                                                       (cons tiles--archive-current
+                                                             tiles--archive-queue))))))
+          (seq-remove (lambda (url)
+                        (or (member url known)
+                            (gethash url tiles--archive-skipped)))
+                      urls))))))
+
+(defun tiles--archive-note (note)
+  "Archive the web pages linked from NOTE that are not archived yet.
+They are queued and fetched in the background, one at a time.  Does
+nothing unless `tiles-archive-urls' is non-nil and warcel is loaded."
+  (when (and tiles-archive-urls
+             (fboundp 'warcel-capture-in-background))
+    (when-let* ((note (expand-file-name note))
+                (new (tiles--note-pending-urls note)))
+      (setq tiles--archive-queue
+            (append tiles--archive-queue
+                    (mapcar (lambda (url) (cons note url)) new)))
+      (tiles--archive-next))))
+
+(defun tiles--archive-next ()
+  "Archive the next queued link, unless one is being archived.
+Its download starts once Emacs has been idle for
+`tiles--archive-idle-delay' seconds."
+  (unless tiles--archive-current
+    (when-let* ((job (pop tiles--archive-queue)))
+      (setq tiles--archive-current job)
+      (let ((idle (current-idle-time)))
+        (if (or (<= tiles--archive-idle-delay 0)
+                (and idle (>= (float-time idle) tiles--archive-idle-delay)))
+            (run-at-time 0 nil #'tiles--archive-start job)
+          (run-with-idle-timer tiles--archive-idle-delay nil
+                               #'tiles--archive-start job))))))
+
+(defun tiles--archive-start (job)
+  "Start archiving JOB, a (NOTE . URL) cons, then the next queued link."
+  (condition-case err
+      (warcel-capture-in-background
+       (cdr job)
+       ;; Chosen once the page is fetched: the note may have been
+       ;; renamed meanwhile (which updates JOB), or deleted.
+       (lambda (status type)
+         (when (<= 200 status 299)
+           (if (tiles--archive-excluded-type-p type)
+               (ignore (puthash (cdr job) type tiles--archive-skipped))
+             (and (file-exists-p (car job))
+                  (tiles--new-archive-file (car job))))))
+       (lambda (file status problem)
+         (let ((skipped (gethash (cdr job) tiles--archive-skipped)))
+           ;; The link is done whatever goes wrong while reporting it:
+           ;; otherwise no other link would be archived this session.
+           (unwind-protect
+               (condition-case err
+                   (cond
+                    (file
+                     (tiles--archive-log "Tiles: archived %s in %s"
+                                         (cdr job) (file-name-nondirectory file))
+                     (when-let* ((buffer (get-file-buffer (car job))))
+                       (with-current-buffer buffer
+                         (tiles--archive-list-show))))
+                    (problem
+                     (tiles--archive-log "Tiles: could not archive %s: %s" (cdr job) problem))
+                    (skipped
+                     (tiles--archive-log "Tiles: did not archive %s: it is %s" (cdr job) skipped))
+                    ((not (<= 200 status 299))
+                     (tiles--archive-log "Tiles: did not archive %s: the server answered %d"
+                                         (cdr job) status)))
+                 (error
+                  (tiles--archive-log "Tiles: error after archiving %s: %s"
+                                      (cdr job) (error-message-string err))))
+             (tiles--archive-done job (unless file
+                                        (tiles--archive-reason status problem skipped)))))))
+    (error
+     (tiles--archive-log "Tiles: could not archive %s: %s"
+                         (cdr job) (error-message-string err))
+     (tiles--archive-done job "error"))))
+
+(defun tiles--archive-log (format-string &rest args)
+  "Log a message about one link, formatted from FORMAT-STRING and ARGS.
+It goes to the *Messages* buffer without being shown: the echo area
+shows one summary per note instead (see `tiles--archive-summary').  In
+batch mode, where there is no echo area, it is printed."
+  (let ((inhibit-message (not noninteractive)))
+    (apply #'message format-string args)))
+
+(defun tiles--archive-reason (status problem skipped)
+  "Return why a link was not archived, in a word or two, for the summary.
+STATUS, PROBLEM and SKIPPED are the status code, error message and
+excluded media type of the attempt, when there are."
+  (let ((case-fold-search t))
+    (cond
+     (skipped (upcase (car (last (split-string skipped "/")))))
+     (problem
+      (cond ((string-prefix-p "Cannot connect" problem) "cannot connect")
+            ((string-prefix-p "No data" problem) "timed out")
+            ((string-prefix-p "No HTTP response" problem) "no response")
+            ((string-match-p "redirect" problem) "redirects")
+            (t "error")))
+     ((and status (not (<= 200 status 299))) (number-to-string status))
+     (t "note deleted"))))
+
+(defun tiles--archive-done (job reason)
+  "Count JOB as archived, or as not archived for REASON, and go on.
+Once the last queued link of the note is done, show the summary, then
+start archiving the next link."
+  (let* ((note (car job))
+         (result (or (gethash note tiles--archive-results) (list 0))))
+    (if reason
+        (setcdr result (append (cdr result) (list (cons (cdr job) reason))))
+      (setcar result (1+ (car result))))
+    (puthash note result tiles--archive-results)
+    (setq tiles--archive-current nil)
+    (unless (assoc note tiles--archive-queue)
+      (remhash note tiles--archive-results)
+      (tiles--archive-summary note result))
+    (tiles--archive-next)))
+
+(defun tiles--archive-summary (note result)
+  "Show how many links of NOTE were archived.
+RESULT is (ARCHIVED . NOT-ARCHIVED): the number of links archived, and
+a list of (URL . REASON) for the others."
+  (let* ((archived (car result))
+         (missed (cdr result))
+         (total (+ archived (length missed))))
+    (message "Tiles: note %s: %d of %d link%s archived%s"
+             (or (tiles--filename-to-timestamp (file-name-nondirectory note))
+                 (file-name-base note))
+             archived total (if (= total 1) "" "s")
+             (if missed
+                 (concat "; not archived: "
+                         (mapconcat (lambda (miss)
+                                      (format "%s (%s)"
+                                              (or (url-host (url-generic-parse-url (car miss)))
+                                                  (car miss))
+                                              (cdr miss)))
+                                    missed ", "))
+               ""))))
+
+(defun tiles--archive-rename (note new-note)
+  "Rename the web archives of NOTE after NEW-NOTE, the note's new name."
+  (let ((dir (tiles--note-archive-directory new-note))
+        (base (file-name-base note)))
+    (when dir
+      (dolist (file (tiles--note-archives note))
+        (make-directory dir t)
+        (rename-file file (expand-file-name
+                           (concat (file-name-base new-note)
+                                   (substring (file-name-nondirectory file)
+                                              (length base)))
+                           dir)))))
+  ;; Pages still being fetched are saved under the new name.
+  (let ((note (expand-file-name note)))
+    (dolist (job (cons tiles--archive-current tiles--archive-queue))
+      (when (equal (car job) note)
+        (setcar job (expand-file-name new-note))))
+    (when-let* ((result (gethash note tiles--archive-results)))
+      (remhash note tiles--archive-results)
+      (puthash (expand-file-name new-note) result tiles--archive-results))))
+
+(defun tiles--archive-after-save ()
+  "Archive the new links of the note saved in the current buffer."
+  (when buffer-file-name
+    (tiles--archive-note buffer-file-name)))
+
+(defvar tiles--archive-external-delay 60
+  "Seconds to wait before archiving the links of a note changed on disk.
+The change may come from another device that archives the same links:
+waiting lets its archives arrive first, so that pages are not saved
+twice.  It also lets a file being written by sync be complete.")
+
+(defvar tiles--archive-scan-timers (make-hash-table :test 'equal)
+  "Timers of the notes changed on disk that wait to have their links archived.")
+
+(defun tiles--archive-note-later (note)
+  "Archive the new links of NOTE, changed on disk, after a while.
+See `tiles--archive-external-delay'.  Each new change of NOTE starts
+the wait again."
+  (when tiles-archive-urls
+    (let ((note (expand-file-name note)))
+      (when-let* ((timer (gethash note tiles--archive-scan-timers)))
+        (cancel-timer timer))
+      (puthash note
+               (run-with-timer tiles--archive-external-delay nil
+                               (lambda ()
+                                 (remhash note tiles--archive-scan-timers)
+                                 (tiles--archive-note note)))
+               tiles--archive-scan-timers))))
+
+(add-hook 'after-save-hook #'tiles--archive-after-save)
+
+;;;; The list of web archives below a note
+
+;; A note visited in a buffer shows the pages archived from its links
+;; below its tag line.  The list is read-only text in the buffer, so
+;; point can move onto it, but it is never written to the note's file:
+;; `tiles--archive-list-annotate' leaves it out of every save and
+;; auto-save.
+
+(defvar tiles--similar-region-start)
+
+(defface tiles-archive-list
+  '((t :inherit shadow))
+  "Face for the list of web archives shown below a note."
+  :group 'tiles)
+
+(defvar-local tiles--archive-list nil
+  "Markers (START . END) of the list of web archives below the note, or nil.")
+;; The list stays in the buffer when its major mode is set again, so
+;; this must stay too, or the list would be saved with the note.
+(put 'tiles--archive-list 'permanent-local t)
+
+(defvar tiles-archive-list-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "RET") #'tiles-open-archive)
+    (define-key map [mouse-2] #'tiles-open-archive)
+    (define-key map [follow-link] 'mouse-face)
+    map)
+  "Keymap of the list of web archives below a note.")
+
+(defun tiles--archive-list-text (note)
+  "Return the lines that list the web archives of NOTE, or nil if none.
+Each line is the address of an archived page."
+  (when-let* ((files (tiles--note-archives note)))
+    (mapconcat
+     (lambda (file)
+       (let ((url (and (fboundp 'warcel-archived-urls)
+                       (car (ignore-errors (warcel-archived-urls file))))))
+         (concat
+          (propertize (if url
+                          ;; Without http://, which Org would make into
+                          ;; links of its own.
+                          (replace-regexp-in-string "https?://" "" url)
+                        (file-name-nondirectory file))
+                      'tiles-archive file
+                      'help-echo (format "RET or mouse-1: open the archived page of %s"
+                                         (or url (file-name-nondirectory file))))
+          "\n")))
+     files "")))
+
+(defun tiles--archive-list-decorate (start end)
+  "Give the list of web archives from START to END its face and keys.
+They are overlays: Org removes faces and keymaps from the text itself
+when it fontifies it."
+  (let ((overlay (make-overlay start end nil t nil)))
+    (overlay-put overlay 'face 'tiles-archive-list)
+    (overlay-put overlay 'tiles-archive-list t)
+    (overlay-put overlay 'evaporate t))
+  (save-excursion
+    (goto-char start)
+    (while (< (point) end)
+      (when (get-text-property (point) 'tiles-archive)
+        (let ((line (make-overlay (point) (min end (line-beginning-position 2))))
+              (address (make-overlay (point) (line-end-position))))
+          (overlay-put line 'keymap tiles-archive-list-map)
+          (overlay-put line 'mouse-face 'highlight)
+          (overlay-put line 'tiles-archive-list t)
+          (overlay-put line 'evaporate t)
+          ;; Shows the address cut to the window, see `tiles--archive-list-fit'.
+          (overlay-put address 'tiles-archive-address t)
+          (overlay-put address 'tiles-archive-list t)
+          (overlay-put address 'evaporate t)))
+      (forward-line 1))))
+
+(defun tiles--archive-list-fit ()
+  "Keep each address listed below the note on one line of its window.
+An address longer than the window is shown cut, ending in an ellipsis;
+the text itself stays whole, for `tiles-open-archive' and its tooltip.
+Run again when the window changes size (`window-configuration-change-hook')."
+  (when tiles--archive-list
+    (save-restriction
+      ;; The note may be narrowed to a part before the list.
+      (widen)
+      (let* ((window (get-buffer-window (current-buffer) t))
+             (width (and window (window-max-chars-per-line window))))
+        (dolist (overlay (overlays-in (car tiles--archive-list) (cdr tiles--archive-list)))
+          (when (overlay-get overlay 'tiles-archive-address)
+            (let ((address (buffer-substring-no-properties
+                            (overlay-start overlay) (overlay-end overlay))))
+              (overlay-put overlay 'display
+                           (and width (> (string-width address) width)
+                                (truncate-string-to-width address width nil nil "…"))))))))))
+
+(defmacro tiles--without-visiting (&rest body)
+  "Run BODY, which changes the list of web archives, as a silent change.
+It leaves no undo entry, keeps the modified flag, and does not count as
+editing the file: that would lock it, or ask what to do if the file
+changed on disk.  The change hooks still run, so Org keeps track."
+  (declare (indent 0) (debug t))
+  `(let ((inhibit-read-only t)
+         (buffer-undo-list t)
+         (modified (buffer-modified-p)))
+     (let ((buffer-file-name nil)
+           (buffer-file-truename nil))
+       ,@body)
+     (restore-buffer-modified-p modified)))
+
+(defun tiles--archive-list-remove ()
+  "Remove the list of web archives from the current buffer."
+  (when tiles--archive-list
+    ;; Widened, since the note may be narrowed to a part before the list.
+    (save-restriction
+      (widen)
+      ;; The list's overlays, and the one hiding blank lines before it.
+      (remove-overlays (point-min) (point-max) 'tiles-archive-list t)
+      (tiles--without-visiting
+        (delete-region (car tiles--archive-list) (cdr tiles--archive-list))))
+    (set-marker (car tiles--archive-list) nil)
+    (set-marker (cdr tiles--archive-list) nil)
+    (setq tiles--archive-list nil)))
+
+(defun tiles--archive-list-show ()
+  "Show the web archives of the note in the current buffer below it.
+Replace the list shown already, if any.  Does nothing if the buffer does
+not visit a note in `tiles-directory', or the note has no archives."
+  (when (and buffer-file-name
+             (tiles--tile-file-p buffer-file-name)
+             (tiles--note-archive-directory buffer-file-name))
+    (save-excursion
+      (tiles--archive-list-remove)
+      ;; The list goes right below the note: similar notes shown in a
+      ;; read-only buffer are hidden first (m shows them again).
+      (when tiles--similar-region-start
+        (tiles--similar-clear))
+      (when-let* ((text (tiles--archive-list-text buffer-file-name)))
+        (tiles--without-visiting
+          (save-restriction
+            (widen)
+            ;; Exactly one empty line between the tag line and the list,
+            ;; however many the note ends with: the list brings the line
+            ;; breaks the note lacks, and blank lines it has beyond the
+            ;; tag line's own line break are hidden while the list shows.
+            (goto-char (point-max))
+            (skip-chars-backward " \t\n")
+            (let ((line-end (search-forward "\n" nil t)))
+              (when (and line-end (< line-end (point-max)))
+                (let ((blank (make-overlay line-end (point-max) nil t nil)))
+                  (overlay-put blank 'invisible 'tiles-archive-list)
+                  (overlay-put blank 'tiles-archive-list t)
+                  (overlay-put blank 'evaporate t))
+                (add-to-invisibility-spec 'tiles-archive-list))
+              (goto-char (point-max))
+              (let ((start (point)))
+                (insert (propertize (concat (if line-end "\n" "\n\n") text)
+                                    'read-only t 'tiles-archive-list t))
+                (tiles--archive-list-decorate start (point))
+                ;; Text typed at the end of the note goes before the list.
+                (setq tiles--archive-list (cons (copy-marker start t) (point-marker)))))))
+        (tiles--archive-list-fit)
+        (add-hook 'window-configuration-change-hook #'tiles--archive-list-fit nil t)
+        (when font-lock-mode
+          (font-lock-flush))))))
+
+(defun tiles--archive-list-annotate (start end)
+  "Leave the list of web archives out of what is written to the file.
+For `write-region-annotate-functions': when the text from START to END
+includes the list, make a copy of it without the list current, which is
+then written instead."
+  (when (and tiles--archive-list (not (stringp start)))
+    (save-restriction
+      (widen)
+      (let* ((start (or start (point-min)))
+             (end (or end (point-max)))
+             (list-start (marker-position (car tiles--archive-list)))
+             (list-end (marker-position (cdr tiles--archive-list))))
+        (when (and (< start list-end) (< list-start end))
+          (let ((text (concat (if (< start list-start)
+                                  (buffer-substring-no-properties start list-start)
+                                "")
+                              (if (< list-end end)
+                                  (buffer-substring-no-properties list-end end)
+                                "")))
+                (coding buffer-file-coding-system))
+            (set-buffer (generate-new-buffer " *tiles-note*" t))
+            (insert text)
+            (setq buffer-file-coding-system coding)
+            ;; `write-region' calls this in the copy once it is written.
+            (setq-local write-region-post-annotation-function #'kill-buffer))))))
+  nil)
+
+;; Global rather than buffer-local, so that no change of major mode
+;; can remove it while the list is shown.
+(add-hook 'write-region-annotate-functions #'tiles--archive-list-annotate)
+
+(defun tiles--archive-list-maybe-show ()
+  "Show the web archives of the note visited in the current buffer.
+For `find-file-hook' and `after-revert-hook'."
+  (when (and buffer-file-name (tiles--tile-file-p buffer-file-name))
+    (tiles--archive-list-show)))
+
+(defun tiles--archive-list-remove-for-export (_backend)
+  "Leave the list of web archives out of an Org export.
+For `org-export-before-processing-functions', which run in the copy of
+the buffer that is exported: web archives never go to a website or a
+newsletter."
+  (let ((inhibit-read-only t)
+        (start (point-min)))
+    (while (setq start (text-property-any start (point-max) 'tiles-archive-list t))
+      (delete-region start (or (next-single-property-change start 'tiles-archive-list)
+                               (point-max))))))
+
+(add-hook 'org-export-before-processing-functions #'tiles--archive-list-remove-for-export)
+
+(add-hook 'find-file-hook #'tiles--archive-list-maybe-show)
+;; Reverting compares the buffer with the file, so the list is taken
+;; out first and shown again afterwards.
+(add-hook 'before-revert-hook #'tiles--archive-list-remove)
+(add-hook 'after-revert-hook #'tiles--archive-list-maybe-show)
+
+(defun tiles-open-archive (&optional event)
+  "Open the web archive listed on the current line below a note.
+The archived page is shown by warcel in a read-only buffer; press q
+there to come back.  EVENT is the mouse event, when there is one."
+  (interactive (list last-nonmenu-event))
+  (when (mouse-event-p event)
+    (posn-set-point (event-start event)))
+  (let ((file (get-text-property (point) 'tiles-archive)))
+    (unless file
+      (user-error "No web archive on this line"))
+    (unless (fboundp 'warcel-open)
+      (user-error "Warcel is not available: it needs Emacs 29.1 or later"))
+    (warcel-open file)))
+
 ;;; Tag-line fontification
 
 (defvar tiles--similar-region-start)
@@ -914,7 +1619,10 @@ Checks that the last non-empty line is a tag line preceded by a blank line."
 Only matches when preceded by a blank line, per the TILES note format.
 Searches up to LIMIT.  Returns non-nil and sets match data if found."
   (let ((tag-line-pos nil)
-        (search-end (or (and (markerp tiles--similar-region-start)
+        ;; The web archives, then similar notes, may follow the note.
+        (search-end (or (and tiles--archive-list
+                             (marker-position (car tiles--archive-list)))
+                        (and (markerp tiles--similar-region-start)
                              (marker-position tiles--similar-region-start))
                         (point-max))))
     (save-excursion
@@ -1101,21 +1809,15 @@ Set tiles-tag-mode to 'unrestricted or a tag list to enable them.")
       (when (bound-and-true-p tiles-focus-mode)
         (tiles-focus-mode -1))
       (tiles--ensure-directory)
-      (let* ((save-dir (tiles--note-save-directory))
-             (filename (tiles--generate-filename))
-             (filepath (expand-file-name filename save-dir)))
-        ;; Ensure we don't overwrite
-        (while (file-exists-p filepath)
-          (sleep-for 0.1)
-          (setq filename (tiles--generate-filename))
-          (setq filepath (expand-file-name filename save-dir)))
+      (let ((filepath (tiles--new-note-filepath)))
         (write-region content nil filepath)
+        (tiles--archive-note filepath)
         (tiles-capture-mode -1)
         (kill-buffer)
         ;; Refresh dashboard if it exists
         (when (get-buffer tiles--notes-buffer-name)
           (tiles-show-notes))
-        (message "Saved: %s" filename)))))
+        (message "Saved: %s" (file-name-nondirectory filepath))))))
 
 (defun tiles-capture-cancel ()
   "Cancel the current TILES capture."
@@ -1131,6 +1833,17 @@ Set tiles-tag-mode to 'unrestricted or a tag list to enable them.")
   "Saved `header-line-format' before `tiles-focus-mode' was activated.")
 (defvar-local tiles--focus-header-remap nil
   "Face remap cookie for `header-line' in `tiles-focus-mode'.")
+(defvar-local tiles--focus-margin-remap nil
+  "Face remap cookie for `margin' in `tiles-focus-mode'.")
+
+(defun tiles--frame-background-color ()
+  "Return the effective background color of the selected frame.
+Prefers the frame parameter over the `default' face's :background
+attribute, since the latter can be the unresolved placeholder
+\"unspecified-bg\" when the color comes from frame parameters or X
+resources rather than face theming."
+  (or (frame-parameter nil 'background-color)
+      (face-attribute 'default :background)))
 
 (defun tiles--focus-reapply ()
   "Re-apply focus mode margins to all windows currently displaying this buffer.
@@ -1157,6 +1870,13 @@ and adds visual breathing room at the top via the header line."
         (setq tiles--focus-saved-margins (window-margins win))
         (set-window-margins win margin margin)
         (set-window-fringes win 0 0)
+        ;; The `margin' face controls the empty margin areas used to center
+        ;; the text; if a theme gives it a background other than `default'
+        ;; (e.g. matching `fringe'), the margins show up as gray bars
+        ;; flanking the centered text, so remap it to blend in.
+        (setq tiles--focus-margin-remap
+              (face-remap-add-relative 'margin
+                :background (tiles--frame-background-color)))
         (setq-local word-wrap t)
         (setq-local truncate-lines nil)
         (visual-line-mode 1)
@@ -1165,7 +1885,7 @@ and adds visual breathing room at the top via the header line."
         (setq tiles--focus-saved-header header-line-format)
         (setq tiles--focus-header-remap
               (face-remap-add-relative 'header-line
-                :background (face-attribute 'default :background)
+                :background (tiles--frame-background-color)
                 :foreground (face-attribute 'default :foreground)
                 :box nil :underline nil :overline nil))
         (setq-local header-line-format
@@ -1177,6 +1897,9 @@ and adds visual breathing room at the top via the header line."
     (when tiles--focus-header-remap
       (face-remap-remove-relative tiles--focus-header-remap)
       (setq tiles--focus-header-remap nil))
+    (when tiles--focus-margin-remap
+      (face-remap-remove-relative tiles--focus-margin-remap)
+      (setq tiles--focus-margin-remap nil))
     (setq-local header-line-format tiles--focus-saved-header)
     (setq tiles--focus-saved-header nil)
     (let ((win (selected-window)))
@@ -1195,11 +1918,10 @@ On confirmation, performs the rename and evicts the old path from the
 cache.  Returns the new filepath, or nil if the user declined."
   (let* ((old-ts (tiles--filename-to-timestamp (file-name-nondirectory filepath)))
          (new-name (tiles--generate-filename))
-         (new-filepath (expand-file-name new-name (file-name-directory filepath)))
+         (new-filepath (tiles--note-filepath new-name filepath))
          (new-ts (tiles--filename-to-timestamp new-name)))
     (when (yes-or-no-p (format "Update timestamp from %s to %s? " old-ts new-ts))
-      (rename-file filepath new-filepath)
-      (tiles--evict-file filepath)
+      (tiles--rename-note filepath new-filepath)
       new-filepath)))
 
 ;;;###autoload
@@ -1216,6 +1938,8 @@ Must be visiting a TILES note file.  Asks for confirmation."
            (new-filepath (tiles--touch-rename filepath)))
       (when new-filepath
         (set-visited-file-name new-filepath t t)
+        ;; Its web archives were renamed with it.
+        (tiles--archive-list-show)
         (when (equal tiles--preview-file filepath)
           (setq tiles--preview-file new-filepath))
         (let ((notes-buf (get-buffer tiles--notes-buffer-name)))
@@ -1228,18 +1952,12 @@ Must be visiting a TILES note file.  Asks for confirmation."
 (defun tiles--quick-save (content tags)
   "Save a note with CONTENT and TAGS (slash-separated string)."
   (tiles--ensure-directory)
-  (let* ((save-dir (tiles--note-save-directory))
-         (filename (tiles--generate-filename))
-         (filepath (expand-file-name filename save-dir))
-         (note (concat content "\n\n" tags "\n")))
-    (while (file-exists-p filepath)
-      (sleep-for 0.1)
-      (setq filename (tiles--generate-filename))
-      (setq filepath (expand-file-name filename save-dir)))
-    (write-region note nil filepath)
+  (let ((filepath (tiles--new-note-filepath)))
+    (write-region (concat content "\n\n" tags "\n") nil filepath)
+    (tiles--archive-note filepath)
     (when (get-buffer tiles--notes-buffer-name)
       (tiles-show-notes))
-    (message "Saved: %s" filename)))
+    (message "Saved: %s" (file-name-nondirectory filepath))))
 
 ;;;###autoload
 (defun tiles-quick ()
@@ -1617,6 +2335,7 @@ Press RET to filter the dashboard by the selected keyword."
     (define-key map (kbd "0") #'tiles-notes-stitch)
     (define-key map (kbd "l") #'tiles-new)
     (define-key map (kbd "g") #'tiles-show-notes)
+    (define-key map (kbd "G") #'tiles-rescan)
     (define-key map (kbd "q") #'tiles-notes-quit)
     map)
   "Keymap for `tiles-notes-view-mode'.")
@@ -1736,11 +2455,17 @@ Otherwise renders with bold/italic faces, stripping footnotes and links."
   (let* ((content (tiles--strip-private-paragraphs
                    (or (plist-get note-data :content) "")))
          (line (string-trim (or (car (split-string content "\n" t)) "")))
-         (rendered (tiles--render-org-preview line))
-         (truncated (if (> (length rendered) tiles-preview-length)
-                        (concat (substring rendered 0 (1- tiles-preview-length)) "…")
-                      rendered)))
-    truncated))
+         (rendered (tiles--render-org-preview line)))
+    ;; By width on screen: CJK characters, for one, take two columns.
+    (if (> (string-width rendered) tiles-preview-length)
+        (truncate-string-to-width rendered tiles-preview-length nil nil "…")
+      rendered)))
+
+(defun tiles--align-to (column &optional file)
+  "Return a space that stretches to COLUMN of the window when displayed.
+It lines things up exactly, whatever the width of the characters before
+it.  FILE, if non-nil, is its `tiles-filepath' property."
+  (propertize " " 'display `(space :align-to ,column) 'tiles-filepath file))
 
 (defun tiles--timestamp-face (filename)
   "Return the appropriate face for FILENAME based on its age."
@@ -1967,7 +2692,7 @@ Shows a dashboard with statistics and note listing."
           (let* ((note-data (tiles--parse-note-file file))
                  (tags (when note-data (plist-get note-data :tags)))
                  (tag-str (if tags (concat "  " (mapconcat #'identity tags "/")) "")))
-            (setq max-tag-len (max max-tag-len (length tag-str)))))
+            (setq max-tag-len (max max-tag-len (string-width tag-str)))))
         (delete-other-windows)
         (switch-to-buffer buf)
         (setq tiles--line-target-width (+ tiles-preview-length tiles-line-padding max-tag-len))
@@ -2164,13 +2889,9 @@ used to compute filesize."
       (when private
         (let* ((priv-str (mapconcat #'identity private " | "))
                (max-priv-len (- tiles--line-target-width 20))
-               (priv-str (if (> (length priv-str) max-priv-len)
-                             (concat (substring priv-str 0 (1- max-priv-len)) "…")
-                           priv-str))
-               (priv-line (concat indent priv-str))
-               (padded-priv (if (< (length priv-line) tiles--line-target-width)
-                                (concat priv-line (make-string (- tiles--line-target-width (length priv-line)) ?\s))
-                              priv-line)))
+               (priv-str (truncate-string-to-width priv-str max-priv-len nil nil "…"))
+               (padded-priv (concat indent priv-str
+                                    (tiles--align-to tiles--line-target-width))))
           (setq result (concat result
                                (propertize padded-priv
                                            'face (list 'font-lock-doc-face 'tiles-notes-expanded)
@@ -2182,13 +2903,8 @@ used to compute filesize."
                        (concat "[" (mapconcat #'identity keywords ", ") "]")
                      "[no keywords]"))
            (max-kw-len (- tiles--line-target-width 20))
-           (kw-str (if (> (length kw-str) max-kw-len)
-                       (concat (substring kw-str 0 (1- max-kw-len)) "…")
-                     kw-str))
-           (kw-line (concat indent kw-str))
-           (padded-kw (if (< (length kw-line) tiles--line-target-width)
-                          (concat kw-line (make-string (- tiles--line-target-width (length kw-line)) ?\s))
-                        kw-line)))
+           (kw-str (truncate-string-to-width kw-str max-kw-len nil nil "…"))
+           (padded-kw (concat indent kw-str (tiles--align-to tiles--line-target-width))))
       (setq result (concat result
                            (propertize padded-kw
                                        'face (list 'tiles-tags 'tiles-notes-expanded)
@@ -2197,10 +2913,7 @@ used to compute filesize."
                            "\n")))
     ;; Stats line
     (let* ((stats (format "%d chars, %d words, %s" char-count word-count filesize))
-           (stats-line (concat indent stats))
-           (padded-stats (if (< (length stats-line) tiles--line-target-width)
-                             (concat stats-line (make-string (- tiles--line-target-width (length stats-line)) ?\s))
-                           stats-line)))
+           (padded-stats (concat indent stats (tiles--align-to tiles--line-target-width))))
       (setq result (concat result
                            (propertize padded-stats
                                        'face (list 'font-lock-comment-face 'tiles-notes-expanded)
@@ -2335,7 +3048,7 @@ Prompts for a new date in YYYY-MM-DD HH:MM or YYYY-MM-DD HH:MM:SS format."
       (let* ((new-fname (format "T%s%s%s%s%s%s.org"
                                 (nth 0 parts) (nth 1 parts) (nth 2 parts)
                                 (nth 3 parts) (nth 4 parts) (nth 5 parts)))
-             (new-filepath (expand-file-name new-fname (file-name-directory filepath))))
+             (new-filepath (tiles--note-filepath new-fname filepath)))
         (when (and (file-exists-p new-filepath)
                    (not (equal filepath new-filepath)))
           (user-error "A note with that timestamp already exists"))
@@ -2347,8 +3060,7 @@ Prompts for a new date in YYYY-MM-DD HH:MM or YYYY-MM-DD HH:MM:SS format."
               (when win (delete-window win))
               (when buf (kill-buffer buf))
               (setq tiles--preview-file nil)))
-          (rename-file filepath new-filepath)
-          (tiles--evict-file filepath)
+          (tiles--rename-note filepath new-filepath)
           ;; Refresh the dashboard
           (tiles-show-notes))))))
 
@@ -2392,9 +3104,6 @@ Prompts for a new date in YYYY-MM-DD HH:MM or YYYY-MM-DD HH:MM:SS format."
          (tag-str (if (and tags (not (tiles--tags-inhibited-p)))
                       (concat "  " (mapconcat #'identity tags "/"))
                     ""))
-         (preview-padded (if (< (length preview) tiles-preview-length)
-                             (concat preview (make-string (- tiles-preview-length (length preview)) ?\s))
-                           preview))
          (has-private (and (not tiles-preview-raw)
                            note-data
                            (let ((content (plist-get note-data :content)))
@@ -2403,16 +3112,15 @@ Prompts for a new date in YYYY-MM-DD HH:MM or YYYY-MM-DD HH:MM:SS format."
          (separator (if has-private
                         (concat " " (propertize "&" 'face 'tiles-tags))
                       "  ")))
-    (let* ((line (concat (propertize "  " 'tiles-filepath file)
-                         (propertize timestamp 'face ts-face 'tiles-filepath file)
-                         (propertize separator 'tiles-filepath file)
-                         (propertize preview-padded 'tiles-filepath file)
-                         (propertize tag-str 'face 'tiles-tags 'tiles-filepath file)))
-           (cur-len (length line)))
-      (if (< cur-len tiles--line-target-width)
-          (concat line (propertize (make-string (- tiles--line-target-width cur-len) ?\s)
-                                   'tiles-filepath file))
-        line))))
+    ;; The tags and the end of the line are aligned on the display, not
+    ;; by counting characters, which wide ones (CJK) would throw off.
+    (concat (propertize "  " 'tiles-filepath file)
+            (propertize timestamp 'face ts-face 'tiles-filepath file)
+            (propertize separator 'tiles-filepath file)
+            (propertize preview 'tiles-filepath file)
+            (tiles--align-to (+ 2 (string-width timestamp) 2 tiles-preview-length) file)
+            (propertize tag-str 'face 'tiles-tags 'tiles-filepath file)
+            (tiles--align-to tiles--line-target-width file))))
 
 (defun tiles--refresh-note-line (filepath)
   "Refresh the line for FILEPATH in the notes viewer buffer."
@@ -2902,15 +3610,28 @@ PARAMS supports :tags, :keywords, :sort (\"newest\"/\"oldest\"), :limit."
                           "")))
           (insert (format "- [[file:%s][%s]] %s%s\n" file timestamp preview tag-str)))))))
 
+(defun tiles--launch-id-from-content (content)
+  "Return the COSPAR launch ID if CONTENT starts with *YYYY-ID*, else nil.
+Matches patterns like *2026-146* or *2026-F01* at the start of the string."
+  (when (string-match "\\`\\*\\([0-9]\\{4\\}-[A-Za-z0-9]+\\)\\*" content)
+    (match-string 1 content)))
+
 (defun org-dblock-write:tiles-files (params)
   "Dynamic block: embed the contents of matching TILES notes.
 PARAMS supports :tags, :keywords, :sort (\"newest\"/\"oldest\"), :limit,
-and :separator (string between notes, default blank line).
+:separator (string between notes, default blank line), and :link-from-btag.
 When `tiles-dblock-html-anchor' is non-nil, each note is preceded by an
 `@@html:<a id=\"...\">@@' Org export snippet, unless the note has a tag
-listed in `tiles-dblock-no-anchor-tags'."
+listed in `tiles-dblock-no-anchor-tags'.
+When :link-from-btag is non-nil, the anchor href is resolved as follows:
+- If the note content starts with *YYYY-ID* (a COSPAR launch ID), the href
+  is \"l/YYYY-ID.html\" pointing to the individual launch page.
+- Otherwise the href is built from the note's bulletin tag (a tag matching
+  \"^b[0-9]+$\", e.g. \"b227\"), producing \"bul/227.html#ANCHOR\".
+- Falls back to the self-link \"#ANCHOR\" when no btag is found."
   (let ((files (tiles--dblock-get-files params))
-        (separator (or (plist-get params :separator) "\n")))
+        (separator (or (plist-get params :separator) "\n"))
+        (link-from-btag (plist-get params :link-from-btag)))
     (if (not files)
         (insert "N/A\n")
       (let ((first t))
@@ -2922,15 +3643,30 @@ listed in `tiles-dblock-no-anchor-tags'."
                 (insert separator))
               (let ((anchor (file-name-sans-extension
                              (file-name-nondirectory file)))
-                    (tags (plist-get note-data :tags)))
+                    (tags (plist-get note-data :tags))
+                    ;; What is published: `&&' paragraphs left out.
+                    (content (tiles--strip-private-paragraphs
+                              (plist-get note-data :content))))
                 (when (and tiles-dblock-html-anchor
                            (not (seq-some (lambda (tag)
                                             (member tag tiles-dblock-no-anchor-tags))
                                           tags)))
-                  (insert (format "@@html:<a id=\"%s\" href=\"#%s\" class=\"paragraph-link\">&rarr;</a>@@\n"
-                                  anchor anchor)))
-                (insert (tiles--strip-private-paragraphs
-                         (plist-get note-data :content)))
+                  (let* ((href (if link-from-btag
+                                   (let ((launch-id (tiles--launch-id-from-content content)))
+                                     (if launch-id
+                                         (format "l/%s.html" launch-id)
+                                       (let* ((btag (seq-find
+                                                      (lambda (tag)
+                                                        (string-match-p "^b[0-9]+$" tag))
+                                                      tags))
+                                              (bnum (when btag (substring btag 1))))
+                                         (if bnum
+                                             (format "bul/%s.html#%s" bnum anchor)
+                                           (format "#%s" anchor)))))
+                                 (format "#%s" anchor))))
+                    (insert (format "@@html:<a id=\"%s\" href=\"%s\" class=\"paragraph-link\">&rarr;</a>@@\n"
+                                    anchor href))))
+                (insert content)
                 (insert "\n")))))))))
 
 ;; Register dblocks for C-c C-x x insertion menu

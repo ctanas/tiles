@@ -154,6 +154,7 @@ Dashboard keybindings:
 | `0`       | Stitch displayed notes into flowing view      |
 | `l`       | New note (same as `C-c m n`)                  |
 | `g`       | Refresh                                       |
+| `G`       | Rescan all notes from disk (`tiles-rescan`)   |
 | `q`       | Quit                                          |
 
 ### Listing all tags and keywords
@@ -288,6 +289,52 @@ The number of results shown is controlled by `tiles-similar-count` (default `5`)
 
 While editing a note, `M-x tiles-touch` updates the file's timestamp to the current time and renames the file accordingly. Asks for confirmation before proceeding. Useful for bumping a note to the top of the chronological list after editing.
 
+### Archiving linked pages
+
+With `(setq tiles-archive-urls t)`, TILES keeps a copy of every web page a note links to, so the note still makes sense when the page changes or disappears. Each time a note is saved (from capture, quick capture, or by editing it), the `http` and `https` links in it that are not archived yet are downloaded in the background with [warcel](warcel/), one WARC file per link, and saved next to your notes:
+
+```
+tiles/
+├── 2026/09/T20260924101500.org
+└── warc/2026/09/
+    ├── T20260924101500a.warc.gz
+    └── T20260924101500b.warc.gz
+```
+
+The `warc/` folder mirrors the note folders, and each archive is named after its note with a letter added (`a`, `b`, … `z`, then `aa`, `ab`, …), in the order the links appear. When you add a link to a note later, only the new link is downloaded. Notes changed outside Emacs, for example on another device and brought over by sync, are checked for new links too, a minute after the change; this uses the file watches of `tiles-watch-files`, which start once you open the dashboard or search in a session. Pages that could not be downloaded, or that the server answered with an error, are tried again the next time the note is saved. When a note's date changes (`u`, `d`, `M-x tiles-touch`), its archives are renamed with it; deleting a note keeps its archives.
+
+Only links to web pages count: local links such as `[[/r/rachete]]` are left alone, and so are links to the hosts in `tiles-archive-exclude-hosts` and their subdomains, e.g. `(setq tiles-archive-exclude-hosts '("example.com"))`. Links in `&&` private paragraphs are archived too.
+
+To leave out some kinds of files, such as large PDFs, list their extensions: `(setq tiles-archive-exclude-file-types '("pdf"))`. Links whose URL ends in `.pdf` are then not downloaded at all, and a link that turns out to lead to a PDF anyway is not saved, nor downloaded again during the Emacs session.
+
+Downloads start once Emacs has been idle for a second and run one at a time. When the links of a note are done, the echo area sums them up in one line, with the reason for each link that could not be archived (the HTTP status, `PDF`, `cannot connect`, `timed out`…):
+
+```
+Tiles: note 2026-09-24 10:15: 3 of 4 links archived; not archived: www.science.org (403)
+```
+
+The details of each link are in the `*Messages*` buffer.
+
+When you open a note that has archives, they are listed below its tag line:
+
+```
+misc/luna
+
+www.nasa.gov/news-release/nasa-to-cover-progress-96-spacecraft-launch-docking
+arstechnica.com/space/2026/09/europe-will-go-it-alone-on-venus-mission
+```
+
+Each address stays on one line: a longer one is cut to the width of the window, ending in `…` (hover over it to see it whole). Move to a line and press `RET` (or click it) to see the archived page, in a read-only buffer: only its title and text, without the menus, headers, footers and sidebars around them (`R` switches to the whole page and back); `q` closes it and brings the note back. The list cannot be edited, is never saved into the note, and is updated when a new archive is made. Nothing about archives ends up in exports: dynamic blocks read the note files, and an Org export of a note's buffer leaves the list out.
+
+Notes you already have are archived the next time you save them. To archive all of them at once, run the script in `scripts/` from a terminal, with the same exclusions; `--dry-run` lists the links first without downloading anything:
+
+```sh
+scripts/tiles-archive-existing.el --notes ~/notes/tiles --exclude example.com --exclude-type pdf --dry-run
+scripts/tiles-archive-existing.el --notes ~/notes/tiles --exclude example.com --exclude-type pdf
+```
+
+It skips the links archived already, so it can be stopped and run again, and it lists at the end the links it could not archive. Open an archive with `M-x warcel-open` or `RET` in Dired. Archiving needs Emacs 29.1 or later, since warcel does; it is loaded with TILES from the `warcel/` folder.
+
 ### Org dynamic blocks
 
 TILES provides two dynamic block types for embedding note data in org files:
@@ -333,7 +380,11 @@ A reverse index (tag → files, keyword → files) is populated alongside the pa
 
 When `tiles-watch-files` is non-nil (default), TILES uses Emacs' built-in `file-notify` to watch `tiles-directory` for external changes (another Emacs instance, mobile sync, `git pull`, etc.) and invalidates affected cache and index entries automatically.
 
-Use `M-x tiles-clear-cache` to force a full reload (also wipes the persistent cache file).
+Use `M-x tiles-rescan` (or `G` in the dashboard) to re-read every note, rebuild the indices, and re-install the file watches, e.g. after moving many notes around outside Emacs. Use `M-x tiles-clear-cache` to drop everything including the persistent cache file; the next access then reloads from scratch.
+
+### Subfolders
+
+Notes are loaded recursively, so any folder layout works for reading. `tiles-year-subfolders` controls where new notes are saved: `nil` (the default) keeps them flat in `tiles-directory`, `t` uses `YYYY/`, and a string is a `format-time-string` template applied to the note's timestamp, e.g. `(setq tiles-year-subfolders "%Y/%m")` for `YYYY/MM/`. When it is set, changing a note's date (`u`, `d`, `M-x tiles-touch`) also moves the note to the matching subfolder.
 
 ## Customization
 
@@ -350,7 +401,7 @@ All settings are available via `M-x customize-group RET tiles`.
 | `tiles-dashboard-limit`| Max notes per page (`nil` = unlimited)   | `50`                 |
 | `tiles-focus-default`  | Enable focus mode for new notes          | `t`                  |
 | `tiles-fancy-separators` | Use Unicode box-drawing separators (═/─) | `t`                |
-| `tiles-year-subfolders`| Save new notes in a `YYYY/` subfolder    | `nil`                |
+| `tiles-year-subfolders`| Subfolder for new notes: `t` = `YYYY/`, or a format like `"%Y/%m"` | `nil` |
 | `tiles-cache-file`     | Path for the persistent cache (`nil` to disable) | `~/.emacs.d/tiles-cache.el` |
 | `tiles-watch-files`    | Watch `tiles-directory` via `file-notify` | `t`                 |
 | `tiles-tag-mode`       | Controls tag behavior (see below)        | `'unrestricted`      |
@@ -359,6 +410,9 @@ All settings are available via `M-x customize-group RET tiles`.
 | `tiles-similar-min-token-length` | Min token length for similarity scoring | `3`            |
 | `tiles-dblock-html-anchor` | Emit `@@html:<a id="...">@@` anchor before each note in `tiles-files` dblocks | `nil` |
 | `tiles-dblock-no-anchor-tags` | Tags that suppress the HTML anchor when it is enabled | `nil` |
+| `tiles-archive-urls`   | Archive the web pages notes link to, in `warc/` (see above) | `nil` |
+| `tiles-archive-exclude-hosts` | Hosts (and their subdomains) whose pages are not archived | `nil` |
+| `tiles-archive-exclude-file-types` | File extensions, such as `"pdf"`, whose files are not archived | `nil` |
 
 ### Tag mode
 
