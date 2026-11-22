@@ -289,6 +289,8 @@ The number of results shown is controlled by `tiles-similar-count` (default `5`)
 
 While editing a note, `M-x tiles-touch` updates the file's timestamp to the current time and renames the file accordingly. Asks for confirmation before proceeding. Useful for bumping a note to the top of the chronological list after editing.
 
+If a note's first paragraph has no key line yet, touching it (or changing its date with `d`) first writes its old key above it as `#+NAME: T…`, so links to it from [daiin](#using-the-same-notes-with-daiin) keep working.
+
 ### Archiving linked pages
 
 With `(setq tiles-archive-urls t)`, TILES keeps a copy of every web page a note links to, so the note still makes sense when the page changes or disappears. Each time a note is saved (from capture, quick capture, or by editing it), the `http` and `https` links in it that are not archived yet are downloaded in the background with [warcel](warcel/), one WARC file per link, and saved next to your notes:
@@ -334,6 +336,21 @@ scripts/tiles-archive-existing.el --notes ~/notes/tiles --exclude example.com --
 ```
 
 It skips the links archived already, so it can be stopped and run again, and it lists at the end the links it could not archive. Open an archive with `M-x warcel-open` or `RET` in Dired. Archiving needs Emacs 29.1 or later, since warcel does; it is loaded with TILES from the `warcel/` folder.
+
+### Using the same notes with daiin
+
+[daiin](https://github.com/ctanas/daiin), a desktop note-taking app where every paragraph can be linked to, can use your TILES folder in place (collection menu → *Open TILES folder…*). It keeps the TILES format: tags on the last line, the first paragraph's key in the file name, and a key line above each other paragraph it can link to:
+
+```org
+*2026-022*: A Falcon 9 launched 25 Starlink satellites...
+
+#+NAME: T20261122192311
+A second paragraph, which daiin can link to.
+
+b218/lx2026/falcon9
+```
+
+TILES leaves the `#+NAME:` lines out of a note's content (previews, stitched view, keywords, dynamic blocks), so they never show. daiin's links, `[[daiin:T20261122192311]]`, open the note at that paragraph when followed (`C-c C-o`), read as the date they point to in previews (`¶2026-11-22 19:23`), and export to HTML as a link to the note's anchor (see `tiles-dblock-html-anchor`).
 
 ### Org dynamic blocks
 
