@@ -322,7 +322,11 @@ Possible values:
 - (required-one-of TAG...): any tags are accepted, but at least one from
   the list must be present.  Prompts suggest the required tags via
   completion (free input is still allowed).  Example:
-  (required-one-of \"work\" \"personal\" \"journal\")"
+  (required-one-of \"work\" \"personal\" \"journal\")
+  A TAG may also be (regexp RE), which every tag RE matches as a whole
+  satisfies (case-sensitively); prompts show RE and suggest the tags
+  in use that it matches.  Example, any year tag such as y2026:
+  (required-one-of \"work\" (regexp \"y20[0-9][0-9]\"))"
   :type '(choice (const :tag "Unrestricted (default)" unrestricted)
                  (const :tag "Inhibit tags" inhibit)
                  (repeat :tag "Allowed tags list (only these accepted)" string)
@@ -1664,9 +1668,45 @@ True only for the plain list-of-strings form, not `required-one-of'."
   (and (consp tiles-tag-mode) (eq (car tiles-tag-mode) 'required-one-of)))
 
 (defun tiles--tags-required-list ()
-  "Return the list of tags at least one of which must be present.
+  "Return the entries at least one of which a note's tags must satisfy.
+Each is a tag string or (regexp RE), see `tiles-tag-mode'.
 Only meaningful when `tiles--tags-required-one-of-p' is non-nil."
   (cdr tiles-tag-mode))
+
+(defun tiles--tag-required-p (tag)
+  "Return non-nil when TAG satisfies an entry of `tiles--tags-required-list'.
+A string entry is TAG itself; (regexp RE) matches when RE matches the
+whole of TAG.  Tags are case-sensitive, so is the match."
+  (let ((case-fold-search nil))
+    (seq-some (lambda (entry)
+                (if (stringp entry)
+                    (string= entry tag)
+                  (and (eq (car-safe entry) 'regexp)
+                       (string-match-p (concat "\\`\\(?:" (cadr entry) "\\)\\'")
+                                       tag))))
+              (tiles--tags-required-list))))
+
+(defun tiles--tags-required-description ()
+  "Return the required tags of `tiles-tag-mode' as text for a prompt.
+A (regexp RE) entry shows as RE."
+  (mapconcat (lambda (entry) (if (stringp entry) entry (cadr entry)))
+             (tiles--tags-required-list) ", "))
+
+(defun tiles--tags-required-candidates ()
+  "Return the required tags of `tiles-tag-mode' as completion candidates.
+The tag strings of the list, then the tags in use that a (regexp RE)
+entry matches: a pattern is never offered as a tag."
+  (let* ((entries (tiles--tags-required-list))
+         (strings (seq-filter #'stringp entries)))
+    (if (seq-every-p #'stringp entries)
+        strings
+      (tiles--ensure-index)
+      (append strings
+              (sort (seq-filter (lambda (tag)
+                                  (and (not (member tag strings))
+                                       (tiles--tag-required-p tag)))
+                                (hash-table-keys tiles--tag-index))
+                    #'string<)))))
 
 (defun tiles--prompt-for-tags (&optional prompt)
   "Prompt for tags according to `tiles-tag-mode'.
@@ -1681,9 +1721,8 @@ PROMPT overrides the default prompt string."
            (input (completing-read pr allowed nil t nil nil default)))
       (if (string-empty-p (string-trim input)) default input)))
    ((tiles--tags-required-one-of-p)
-    (let* ((required (tiles--tags-required-list))
-           (pr (or prompt (format "Tags (at least one of: %s): "
-                                  (mapconcat #'identity required ", ")))))
+    (let ((pr (or prompt (format "Tags (at least one of: %s): "
+                                 (tiles--tags-required-description)))))
       (read-string pr)))
    (t (read-string (or prompt "Tags (separated by /): ")))))
 
@@ -1702,14 +1741,13 @@ Set tiles-tag-mode to 'unrestricted or a tag list to enable them.")
     (let* ((candidates
             (cond
              ((tiles--tags-restricted-p) tiles-tag-mode)
-             ((tiles--tags-required-one-of-p) (tiles--tags-required-list))
+             ((tiles--tags-required-one-of-p) (tiles--tags-required-candidates))
              (t (hash-table-keys (car (tiles--list-collect-data))))))
            (require-match (and (tiles--tags-restricted-p) t))
            (prompt
             (cond
              ((tiles--tags-required-one-of-p)
-              (format "Tag (required: %s): "
-                      (mapconcat #'identity (tiles--tags-required-list) ", ")))
+              (format "Tag (required: %s): " (tiles--tags-required-description)))
              (t "Tag: ")))
            (tag (completing-read prompt candidates nil require-match)))
       (unless (string-empty-p (string-trim tag))
@@ -1801,10 +1839,9 @@ Set tiles-tag-mode to 'unrestricted or a tag list to enable them.")
                                 (mapconcat #'identity invalid ", ")
                                 (mapconcat #'identity tiles-tag-mode ", ")))))
                ((tiles--tags-required-one-of-p)
-                (let ((required (tiles--tags-required-list)))
-                  (unless (seq-some (lambda (tag) (member tag required)) tags)
-                    (user-error "At least one of these tags is required: %s"
-                                (mapconcat #'identity required ", "))))))))))
+                (unless (seq-some #'tiles--tag-required-p tags)
+                  (user-error "At least one of these tags is required: %s"
+                              (tiles--tags-required-description)))))))))
       ;; Step 4: save
       (when (bound-and-true-p tiles-focus-mode)
         (tiles-focus-mode -1))
@@ -2005,8 +2042,8 @@ QUERY uses / for AND and space for OR.
                        ((tiles--tags-required-one-of-p)
                         (completing-read
                          (format "Search tags (required: %s): "
-                                 (mapconcat #'identity (tiles--tags-required-list) ", "))
-                         (tiles--tags-required-list) nil nil))
+                                 (tiles--tags-required-description))
+                         (tiles--tags-required-candidates) nil nil))
                        (t (read-string "Search tags: ")))))
   (let* ((query-tags (tiles--parse-tag-query query))
          (results (tiles--sort-newest-first
@@ -2225,10 +2262,10 @@ Prompts for the new name and reports how many files were modified."
             (user-error "New tag not in allowed list: %s"
                         (mapconcat #'identity tiles-tag-mode ", "))))
          ((tiles--tags-required-one-of-p)
-          (when (and (member item (tiles--tags-required-list))
-                     (not (member new-name (tiles--tags-required-list))))
+          (when (and (tiles--tag-required-p item)
+                     (not (tiles--tag-required-p new-name)))
             (unless (yes-or-no-p
-                     (format "\"%s\" is in the required list and \"%s\" is not.  Continue? "
+                     (format "\"%s\" is a required tag and \"%s\" is not.  Continue? "
                              item new-name))
               (user-error "Aborted"))))))
       (tiles--ensure-index)
@@ -2491,8 +2528,8 @@ it.  FILE, if non-nil, is its `tiles-filepath' property."
                        ((tiles--tags-required-one-of-p)
                         (completing-read
                          (format "Filter by tag (required: %s): "
-                                 (mapconcat #'identity (tiles--tags-required-list) ", "))
-                         (tiles--tags-required-list) nil nil))
+                                 (tiles--tags-required-description))
+                         (tiles--tags-required-candidates) nil nil))
                        (t (read-string "Filter by tag: ")))))
   (if (string-empty-p (string-trim query))
       (tiles-notes-clear-filter)
@@ -2520,8 +2557,8 @@ QUERY is a space-separated list of tags to exclude."
                        ((tiles--tags-required-one-of-p)
                         (completing-read
                          (format "Exclude tag (required: %s): "
-                                 (mapconcat #'identity (tiles--tags-required-list) ", "))
-                         (tiles--tags-required-list) nil nil))
+                                 (tiles--tags-required-description))
+                         (tiles--tags-required-candidates) nil nil))
                        (t (read-string "Exclude tags (space-separated): ")))))
   (if (string-empty-p (string-trim query))
       (message "No tags specified")

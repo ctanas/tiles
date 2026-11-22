@@ -458,6 +458,14 @@ With this setting: `C-c m n` and `C-c m q`/`C-c m y` prompt for a tag using comp
 
 With this setting: `C-c m n` and `C-c m q`/`C-c m y` prompt for tags with the required tags suggested via completion (free input still allowed); `t`, `F`, and `C-c m t` in the dashboard also suggest the required tags but accept any string. If the saved note contains none of the required tags, the save is rejected with a clear error message.
 
+A required tag can also be a pattern, `(regexp RE)`: any tag the regular expression matches as a whole (case-sensitively) counts. For example, to require a topic tag or any year tag such as `y2026` or `y2027`:
+
+```elisp
+(setq tiles-tag-mode '(required-one-of "work" "personal" (regexp "y20[0-9][0-9]")))
+```
+
+Prompts and error messages show the pattern as written; completion offers the tags already in use that it matches (`y2025`, `y2026`, ...), never the pattern itself.
+
 Example configuration:
 
 ```elisp
