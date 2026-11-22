@@ -288,6 +288,23 @@ The number of results shown is controlled by `tiles-similar-count` (default `5`)
 
 While editing a note, `M-x tiles-touch` updates the file's timestamp to the current time and renames the file accordingly. Asks for confirmation before proceeding. Useful for bumping a note to the top of the chronological list after editing.
 
+If a note's first paragraph has no key line yet, touching it (or changing its date with `d`) first writes its old key above it as `#+NAME: T…`, so links to it from [daiin](#using-the-same-notes-with-daiin) keep working.
+
+### Using the same notes with daiin
+
+[daiin](https://github.com/ctanas/daiin), a desktop note-taking app where every paragraph can be linked to, can use your TILES folder in place (collection menu → *Open TILES folder…*). It keeps the TILES format: tags on the last line, the first paragraph's key in the file name, and a key line above each other paragraph it can link to:
+
+```org
+*2026-022*: A Falcon 9 launched 25 Starlink satellites...
+
+#+NAME: T20261122192311
+A second paragraph, which daiin can link to.
+
+b218/lx2026/falcon9
+```
+
+TILES leaves the `#+NAME:` lines out of a note's content (previews, stitched view, keywords, dynamic blocks), so they never show. daiin's links, `[[daiin:T20261122192311]]`, open the note at that paragraph when followed (`C-c C-o`), read as the date they point to in previews (`¶2026-11-22 19:23`), and export to HTML as a link to the note's anchor (see `tiles-dblock-html-anchor`).
+
 ### Org dynamic blocks
 
 TILES provides two dynamic block types for embedding note data in org files:

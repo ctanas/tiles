@@ -315,6 +315,18 @@ has any of these tags will not get an HTML anchor."
 
 ;;; Internal Variables
 
+(defconst tiles--key-line-regexp
+  "^[ \t]*#\\+[Nn][Aa][Mm][Ee]:[ \t]*\\(T[0-9]\\{14\\}[a-z]*\\)[ \t]*$"
+  "A paragraph key line, as daiin writes it: `#+NAME: T20261121234012'.
+daiin, a note-taking app that can use a TILES folder in place, names
+every paragraph but the first with such a line so it can link to it (the
+first paragraph's key is the file name).  These lines are not content:
+`tiles--parse-note-file' leaves them out.")
+
+(defconst tiles--daiin-link-regexp "\\[\\[daiin:\\(T[0-9]\\{14\\}\\)[a-z]*\\]\\]"
+  "A daiin link without a description, such as `[[daiin:T20261121234012]]'.
+The group is the date part of the key.")
+
 (defvar tiles--current-search-results nil
   "Current list of search results (file paths).")
 
@@ -498,13 +510,16 @@ Results are cached and only re-parsed when the file's mtime changes."
 (defun tiles--parse-note-file-uncached (filepath)
   "Parse a TILES note file at FILEPATH without caching.
 The last non-empty line is always treated as the tag line.
-Everything before it (minus the trailing blank separator) is content."
+Everything before it (minus the trailing blank separator) is content.
+Paragraph key lines (`tiles--key-line-regexp') are not content; their
+keys are listed under :keys."
   (with-temp-buffer
     (insert-file-contents filepath)
     (let* ((content (buffer-string))
            (lines (split-string content "\n"))
            (tag-line nil)
-           (paragraph-lines nil))
+           (paragraph-lines nil)
+           (keys nil))
       ;; Find the last non-empty line as the tag line
       (let ((i (1- (length lines))))
         (while (and (>= i 0) (string-empty-p (string-trim (nth i lines))))
@@ -516,6 +531,13 @@ Everything before it (minus the trailing blank separator) is content."
           (while (and (>= i 0) (string-empty-p (string-trim (nth i lines))))
             (setq i (1- i)))
           (setq paragraph-lines (seq-take lines (1+ i)))))
+      ;; daiin's key lines name paragraphs; they are not part of them.
+      (setq paragraph-lines
+            (seq-remove (lambda (line)
+                          (when (string-match tiles--key-line-regexp line)
+                            (push (match-string 1 line) keys)
+                            t))
+                        paragraph-lines))
       (let* ((paragraph (mapconcat #'identity paragraph-lines "\n"))
              (tags (when tag-line
                      (split-string tag-line "/" t "[ \t]+")))
@@ -524,6 +546,7 @@ Everything before it (minus the trailing blank separator) is content."
         (list :content paragraph
               :tags tags
               :keywords keywords
+              :keys (nreverse keys)
               :filepath filepath)))))
 
 (defun tiles-clear-cache ()
@@ -1198,6 +1221,7 @@ cache.  Returns the new filepath, or nil if the user declined."
          (new-filepath (expand-file-name new-name (file-name-directory filepath)))
          (new-ts (tiles--filename-to-timestamp new-name)))
     (when (yes-or-no-p (format "Update timestamp from %s to %s? " old-ts new-ts))
+      (tiles--keep-key filepath)
       (rename-file filepath new-filepath)
       (tiles--evict-file filepath)
       new-filepath)))
@@ -1688,8 +1712,9 @@ FILENAME should match TYYYYMMDDHHMMSS.org."
   "Strip all `org-mode' markup from TEXT, returning plain text.
 Handles inline footnotes, links (with or without description), and the
 emphasis markups: bold (*x*), italic (/x/), underline (_x_),
-strikethrough (+x+), code (~x~), and verbatim (=x=)."
-  (let ((result text))
+strikethrough (+x+), code (~x~), and verbatim (=x=).  A daiin link
+without a description reads as the date it points to."
+  (let ((result (tiles--daiin-links-as-text text)))
     (setq result (replace-regexp-in-string "\\[fn:[^]]*\\]" "" result))
     (setq result (replace-regexp-in-string "\\[\\[\\(?:[^][]+\\)\\]\\[\\([^][]+\\)\\]\\]" "\\1" result))
     (setq result (replace-regexp-in-string "\\[\\[[^][]+\\]\\]" "" result))
@@ -1708,7 +1733,7 @@ Otherwise renders with bold/italic faces, stripping footnotes and links."
   (if tiles-preview-raw
       (tiles--strip-org-markup text)
     ;; Strip inline footnotes [fn:...]
-    (let ((result text))
+    (let ((result (tiles--daiin-links-as-text text)))
       (setq result (replace-regexp-in-string "\\[fn:[^]]*\\]" "" result))
       ;; Replace org links [[url][desc]] with just desc, and [[url]] with empty
       (setq result (replace-regexp-in-string "\\[\\[\\(?:[^][]+\\)\\]\\[\\([^][]+\\)\\]\\]" "\\1" result))
@@ -2347,6 +2372,7 @@ Prompts for a new date in YYYY-MM-DD HH:MM or YYYY-MM-DD HH:MM:SS format."
               (when win (delete-window win))
               (when buf (kill-buffer buf))
               (setq tiles--preview-file nil)))
+          (tiles--keep-key filepath)
           (rename-file filepath new-filepath)
           (tiles--evict-file filepath)
           ;; Refresh the dashboard
@@ -2939,6 +2965,120 @@ listed in `tiles-dblock-no-anchor-tags'."
                '("tiles-notes" . org-dblock-write:tiles-notes))
   (add-to-list 'org-dynamic-block-alist
                '("tiles-files" . org-dblock-write:tiles-files)))
+
+;;; daiin compatibility
+;;
+;; daiin (a note-taking app with paragraph links) can use a TILES folder
+;; in place.  It keeps TILES's format: the tag line last, the first
+;; paragraph's key in the file name, and a `#+NAME:' key line above every
+;; other paragraph it can link to.  Its links are `[[daiin:KEY]]'.  So that
+;; both work on the same notes, TILES leaves key lines out of a note's
+;; content, follows and exports daiin links, and writes a note's key into
+;; its first paragraph before a rename gives the note a new one.
+
+(declare-function org-export-derived-backend-p "ox" (backend &rest backends))
+(declare-function org-html-encode-plain-text "ox-html" (text))
+
+(defun tiles--daiin-link-text (key)
+  "How a daiin link to KEY reads as plain text: a pilcrow and KEY's date.
+Keeps the match data (it is called from `replace-regexp-in-string')."
+  (save-match-data
+    (tiles--daiin-link-text-1 key)))
+
+(defun tiles--daiin-link-text-1 (key)
+  "The text for `tiles--daiin-link-text' of KEY."
+  (if (string-match "\\`T\\([0-9]\\{4\\}\\)\\([0-9]\\{2\\}\\)\\([0-9]\\{2\\}\\)\\([0-9]\\{2\\}\\)\\([0-9]\\{2\\}\\)"
+                    key)
+      (format "\u00b6%s-%s-%s %s:%s"
+              (match-string 1 key) (match-string 2 key) (match-string 3 key)
+              (match-string 4 key) (match-string 5 key))
+    key))
+
+(defun tiles--daiin-links-as-text (text)
+  "TEXT with each daiin link without a description as its date."
+  (replace-regexp-in-string tiles--daiin-link-regexp
+                            (lambda (link)
+                              (tiles--daiin-link-text (match-string 1 link)))
+                            text t t))
+
+(defun tiles--key-line-regexp-for (key)
+  "A regexp matching the key line of KEY."
+  (format "^[ \t]*#\\+[Nn][Aa][Mm][Ee]:[ \t]*%s[ \t]*$" (regexp-quote key)))
+
+(defun tiles--key-file (key)
+  "The note file that has KEY, or nil.
+KEY is a paragraph's (a key line in the note) or a note's (its file name),
+looked up in that order, as daiin does."
+  (let ((files (tiles--get-all-tile-files)))
+    (or (seq-find (lambda (file)
+                    (member key (plist-get (tiles--parse-note-file file) :keys)))
+                  files)
+        (seq-find (lambda (file) (string= (file-name-base file) key)) files))))
+
+(defun tiles--daiin-follow (key &optional _arg)
+  "Open the note that has KEY, at the paragraph it names (a daiin link)."
+  (let ((file (tiles--key-file key)))
+    (unless file
+      (user-error "No note has the key %s" key))
+    (find-file file)
+    (tiles--enable-tag-line-fontification)
+    (goto-char (point-min))
+    (when (re-search-forward (tiles--key-line-regexp-for key) nil t)
+      (forward-line 1))))
+
+(defun tiles--daiin-export (key description backend _info)
+  "Export a daiin link to KEY as DESCRIPTION, or else KEY's date.
+For HTML it links to the anchor of KEY's note, which the `tiles-files'
+dynamic block writes when `tiles-dblock-html-anchor' is set."
+  (let ((text (or description (tiles--daiin-link-text key))))
+    (if (org-export-derived-backend-p backend 'html)
+        (let ((file (tiles--key-file key))
+              ;; DESCRIPTION comes exported already; the date is plain text.
+              (html (or description (org-html-encode-plain-text text))))
+          (if file
+              (format "<a href=\"#%s\">%s</a>" (file-name-base file) html)
+            html))
+      text)))
+
+(org-link-set-parameters "daiin"
+                         :follow #'tiles--daiin-follow
+                         :export #'tiles--daiin-export)
+
+(defun tiles--insert-key-line (key)
+  "Put a key line for KEY above the first paragraph of the note here.
+Not when the first paragraph has a key line already or is private, or
+when the note has nothing but its tag line.  Return non-nil if it did."
+  (goto-char (point-min))
+  (skip-chars-forward " \t\n")
+  (let ((first (line-beginning-position))
+        (tag-line (save-excursion
+                    (goto-char (point-max))
+                    (skip-chars-backward " \t\n")
+                    (line-beginning-position))))
+    (goto-char first)
+    (unless (or (>= first tag-line)
+                (looking-at tiles--key-line-regexp)
+                (looking-at "[ \t]*&&"))
+      (insert "#+NAME: " key "\n")
+      t)))
+
+(defun tiles--keep-key (filepath)
+  "Write the key of the note FILEPATH into its first paragraph.
+Called before a rename: the first paragraph's key is the file name, so
+renaming would change it and break daiin's links to it.  A buffer
+visiting FILEPATH is saved first and reverted after."
+  (let ((key (file-name-base filepath))
+        (buffer (get-file-buffer filepath)))
+    (when (and buffer (buffer-modified-p buffer))
+      (with-current-buffer buffer (save-buffer)))
+    (when (with-temp-buffer
+            (insert-file-contents filepath)
+            (when (tiles--insert-key-line key)
+              (write-region (point-min) (point-max) filepath nil 'silent)
+              t))
+      (when buffer
+        (with-current-buffer buffer
+          (revert-buffer t t t))))))
 
 ;;; Keybindings
 
