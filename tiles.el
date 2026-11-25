@@ -60,6 +60,10 @@
 ;; - Unicode box-drawing dashboard separators (tiles-fancy-separators)
 ;; - In-memory cache with mtime invalidation for fast repeated access
 ;; - Org dynamic blocks for embedding note lists/contents in org files
+;; - Optional archiving of the web pages notes link to, as WARC files
+;;   next to the notes.  Off by default; turn it on with
+;;   (setq tiles-archive-urls t).  Needs Emacs 29.1 or later and
+;;   warcel, which comes with TILES in its warcel/ folder.
 ;;
 ;; Global keybindings (under C-c m):
 ;;   C-c m m   - Dashboard (tiles-show-notes)
@@ -202,7 +206,9 @@
 (require 'mailcap)
 
 ;; Warcel (WARC web archives) lives in the warcel/ subdirectory until it
-;; is folded into TILES.  It needs Emacs 29.1; TILES works without it.
+;; is folded into TILES.  It is only loaded once link archiving is
+;; turned on (`tiles-archive-urls'), and needs Emacs 29.1; TILES works
+;; without it.
 (eval-and-compile
   (let ((dir (expand-file-name
               "warcel"
@@ -212,8 +218,6 @@
                    buffer-file-name)))))
     (when (file-directory-p dir)
       (add-to-list 'load-path dir))))
-(when (>= emacs-major-version 29)
-  (require 'warcel nil t))
 
 (declare-function file-notify-add-watch "filenotify" (file flags callback))
 (declare-function file-notify-rm-watch "filenotify" (descriptor))
@@ -350,6 +354,8 @@ has any of these tags will not get an HTML anchor."
 
 (defcustom tiles-archive-urls nil
   "When non-nil, archive the web pages that notes link to.
+Off by default; turn it on with (setq tiles-archive-urls t).
+
 Each time a note is saved, the http and https links in it that are not
 archived yet are fetched in the background and saved with warcel, one
 WARC file per link.  The files go in the warc/ folder of
@@ -358,7 +364,12 @@ after the note with letters added: the links of T20260924101500.org
 are saved in T20260924101500a.warc.gz, T20260924101500b.warc.gz, and so
 on.  Pages that fail to download are tried again the next time the
 note is saved.  Links to `tiles-archive-exclude-hosts' are skipped.
-Needs warcel, which TILES loads on Emacs 29.1 or later."
+A note visited in a buffer lists its archives below its tag line;
+RET on one shows the archived page.
+
+While this is nil, nothing of it runs and warcel is not loaded.
+Archiving needs Emacs 29.1 or later and warcel, which comes with
+TILES in its warcel/ folder."
   :type 'boolean
   :group 'tiles)
 
@@ -1091,6 +1102,53 @@ Checks that the last non-empty line is a tag line preceded by a blank line."
 
 ;;; Link archiving
 
+;; Off unless `tiles-archive-urls' is set.  Warcel is loaded the first
+;; time archiving is needed, or as soon as the option is turned on (see
+;; `tiles--archive-urls-watcher'), never just by loading TILES.
+
+(defvar tiles--warcel-missing nil
+  "Non-nil once warcel was looked for and could not be loaded.")
+
+(defun tiles--warcel-load ()
+  "Load warcel unless it is loaded already; return non-nil if it is loaded.
+If it cannot be loaded, warn about it, once per session."
+  (or (featurep 'warcel)
+      (unless tiles--warcel-missing
+        (or (and (>= emacs-major-version 29)
+                 (condition-case err
+                     (require 'warcel nil t)
+                   (error
+                    (message "Tiles: could not load warcel: %s"
+                             (error-message-string err))
+                    nil)))
+            (progn
+              (setq tiles--warcel-missing t)
+              (display-warning
+               'tiles
+               (if (< emacs-major-version 29)
+                   "`tiles-archive-urls' is on, but archiving linked pages needs Emacs 29.1 or later"
+                 "`tiles-archive-urls' is on, but warcel could not be loaded, so linked pages are not archived.  Warcel comes with TILES in its warcel/ folder: install TILES from its Git repository, or add that folder to `load-path'")
+               :warning)
+              nil)))))
+
+(defun tiles--archive-enabled-p ()
+  "Return non-nil if the web pages linked from notes are to be archived.
+That is when `tiles-archive-urls' is non-nil and warcel can be loaded."
+  (and tiles-archive-urls (tiles--warcel-load)))
+
+(defun tiles--archive-urls-watcher (_symbol newval operation _where)
+  "Load warcel as soon as `tiles-archive-urls' is turned on.
+For `add-variable-watcher': NEWVAL is the new value and OPERATION the
+kind of change.  Warcel's own commands, such as `warcel-open', are
+then available right away, before TILES first needs them."
+  (when (and newval (memq operation '(set let)))
+    (tiles--warcel-load)))
+
+(add-variable-watcher 'tiles-archive-urls #'tiles--archive-urls-watcher)
+;; Also when it was set before TILES was loaded.
+(when tiles-archive-urls
+  (tiles--warcel-load))
+
 (defun tiles--archive-directory ()
   "Return the directory holding the web archives of linked pages."
   (expand-file-name "warc" tiles-directory))
@@ -1228,9 +1286,8 @@ warcel."
 (defun tiles--archive-note (note)
   "Archive the web pages linked from NOTE that are not archived yet.
 They are queued and fetched in the background, one at a time.  Does
-nothing unless `tiles-archive-urls' is non-nil and warcel is loaded."
-  (when (and tiles-archive-urls
-             (fboundp 'warcel-capture-in-background))
+nothing unless `tiles-archive-urls' is non-nil and warcel can be loaded."
+  (when (tiles--archive-enabled-p)
     (when-let* ((note (expand-file-name note))
                 (new (tiles--note-pending-urls note)))
       (setq tiles--archive-queue
@@ -1379,7 +1436,9 @@ a list of (URL . REASON) for the others."
 
 (defun tiles--archive-after-save ()
   "Archive the new links of the note saved in the current buffer."
-  (when buffer-file-name
+  (when (and tiles-archive-urls
+             buffer-file-name
+             (tiles--tile-file-p buffer-file-name))
     (tiles--archive-note buffer-file-name)))
 
 (defvar tiles--archive-external-delay 60
@@ -1530,11 +1589,16 @@ changed on disk.  The change hooks still run, so Org keeps track."
 
 (defun tiles--archive-list-show ()
   "Show the web archives of the note in the current buffer below it.
-Replace the list shown already, if any.  Does nothing if the buffer does
-not visit a note in `tiles-directory', or the note has no archives."
-  (when (and buffer-file-name
-             (tiles--tile-file-p buffer-file-name)
-             (tiles--note-archive-directory buffer-file-name))
+Replace the list shown already, if any.  Shows nothing if
+`tiles-archive-urls' is nil, the buffer does not visit a note in
+`tiles-directory', or the note has no archives."
+  (if (not (and tiles-archive-urls
+                buffer-file-name
+                (tiles--tile-file-p buffer-file-name)
+                (tiles--note-archive-directory buffer-file-name)
+                (tiles--warcel-load)))
+      ;; A list shown before archiving was turned off goes away.
+      (tiles--archive-list-remove)
     (save-excursion
       (tiles--archive-list-remove)
       ;; The list goes right below the note: similar notes shown in a
@@ -1636,7 +1700,7 @@ there to come back.  EVENT is the mouse event, when there is one."
   (let ((file (get-text-property (point) 'tiles-archive)))
     (unless file
       (user-error "No web archive on this line"))
-    (unless (fboundp 'warcel-open)
+    (unless (tiles--warcel-load)
       (user-error "Warcel is not available: it needs Emacs 29.1 or later"))
     (warcel-open file)))
 

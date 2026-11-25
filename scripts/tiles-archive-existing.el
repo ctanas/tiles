@@ -88,12 +88,13 @@
              excluded-types))
       ("--dry-run" (setq dry-run t))
       (arg (tiles-archive-existing--fail "Unknown argument: %s" arg))))
+  ;; Turning archiving on loads warcel.
+  (setq tiles-archive-urls t)
   (unless (fboundp 'warcel-capture-in-background)
     (tiles-archive-existing--fail "Warcel is not available: it needs Emacs 29.1 or later"))
   (unless (file-directory-p tiles-directory)
     (tiles-archive-existing--fail "No such directory: %s" tiles-directory))
-  (setq tiles-archive-urls t
-        tiles-archive-exclude-hosts excluded
+  (setq tiles-archive-exclude-hosts excluded
         tiles-archive-exclude-file-types excluded-types
         ;; Nobody is typing: start each download at once.
         tiles--archive-idle-delay 0

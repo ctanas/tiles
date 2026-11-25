@@ -89,6 +89,8 @@ Clone the repository and add to your load path:
 (require 'tiles)
 ```
 
+Both ways also bring warcel, in the `warcel/` folder, which the optional [archiving of linked pages](#archiving-linked-pages-optional) uses. TILES does not load it unless you turn archiving on.
+
 Set your notes directory (default `~/notes/tiles/`):
 
 ```elisp
@@ -291,9 +293,28 @@ While editing a note, `M-x tiles-touch` updates the file's timestamp to the curr
 
 If a note's first paragraph has no key line yet, touching it (or changing its date with `d`) first writes its old key above it as `#+NAME: T…`, so links to it from [daiin](#using-the-same-notes-with-daiin) keep working.
 
-### Archiving linked pages
+### Archiving linked pages (optional)
 
-With `(setq tiles-archive-urls t)`, TILES keeps a copy of every web page a note links to, so the note still makes sense when the page changes or disappears. Each time a note is saved (from capture, quick capture, or by editing it), the `http` and `https` links in it that are not archived yet are downloaded in the background with [warcel](warcel/), one WARC file per link, and saved next to your notes:
+TILES can keep a copy of every web page a note links to, so the note still makes sense when the page changes or disappears. This is **off by default**: until you turn it on, nothing is downloaded, no archive list is shown under your notes, and warcel (the library that does the work) is not even loaded.
+
+**Turning it on.** Add this line to your init file, before or after `(require 'tiles)`:
+
+```elisp
+(setq tiles-archive-urls t)
+```
+
+and, optionally, the sites and the kinds of files you never want archived (both explained below):
+
+```elisp
+(setq tiles-archive-exclude-hosts '("example.com"))
+(setq tiles-archive-exclude-file-types '("pdf"))
+```
+
+You can also turn it on in a running Emacs, with `M-x customize-variable RET tiles-archive-urls` or by evaluating the `setq` line above. To turn it off, set it back to `nil`: no more pages are downloaded and the lists are no longer shown, but the archives already made stay in `warc/` and come back if you turn it on again.
+
+**Requirements.** Archiving needs Emacs 29.1 or later and [warcel](warcel/), a reader and writer for WARC web archives that comes with TILES, in its `warcel/` folder. If you install TILES with `package-vc-install` or from a clone of this repository (see [Installation](#installation)), TILES finds warcel on its own. The MELPA package contains only `tiles.el`: to use archiving with it, clone this repository and add its `warcel/` folder to your `load-path`, e.g. `(add-to-list 'load-path "~/src/tiles/warcel")`. If warcel cannot be loaded, TILES shows a warning once and goes on working as usual, without archiving.
+
+**How it works.** Each time a note is saved (from capture, quick capture, or by editing it), the `http` and `https` links in it that are not archived yet are downloaded in the background, one WARC file per link, and saved next to your notes:
 
 ```
 tiles/
@@ -335,7 +356,9 @@ scripts/tiles-archive-existing.el --notes ~/notes/tiles --exclude example.com --
 scripts/tiles-archive-existing.el --notes ~/notes/tiles --exclude example.com --exclude-type pdf
 ```
 
-It skips the links archived already, so it can be stopped and run again, and it lists at the end the links it could not archive. Open an archive with `M-x warcel-open` or `RET` in Dired. Archiving needs Emacs 29.1 or later, since warcel does; it is loaded with TILES from the `warcel/` folder.
+It skips the links archived already, so it can be stopped and run again, and it lists at the end the links it could not archive. It turns archiving on by itself, so it works whatever your init file says.
+
+Once archiving is on, warcel's own commands are available too: open any archive with `M-x warcel-open` or `RET` in Dired, or save a page you are not linking from a note with `M-x warcel-capture`. See [warcel's README](warcel/README.md).
 
 ### Using the same notes with daiin
 
@@ -427,7 +450,7 @@ All settings are available via `M-x customize-group RET tiles`.
 | `tiles-similar-min-token-length` | Min token length for similarity scoring | `3`            |
 | `tiles-dblock-html-anchor` | Emit `@@html:<a id="...">@@` anchor before each note in `tiles-files` dblocks | `nil` |
 | `tiles-dblock-no-anchor-tags` | Tags that suppress the HTML anchor when it is enabled | `nil` |
-| `tiles-archive-urls`   | Archive the web pages notes link to, in `warc/` (see above) | `nil` |
+| `tiles-archive-urls`   | Archive the web pages notes link to, in `warc/` (off by default, see [Archiving linked pages](#archiving-linked-pages-optional)) | `nil` |
 | `tiles-archive-exclude-hosts` | Hosts (and their subdomains) whose pages are not archived | `nil` |
 | `tiles-archive-exclude-file-types` | File extensions, such as `"pdf"`, whose files are not archived | `nil` |
 
