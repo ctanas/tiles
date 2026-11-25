@@ -2,7 +2,7 @@
 
 TILES is an Emacs package for taking quick, title-less notes. 
 
-Each note (or *tile*, if you will) is a single paragraph stored in its own org file, organized through tags and bold keywords rather than hierarchies. TILES tries to keep it simple: there are no dependencies (except for Emacs, version 27.1 at least), no links between notes (except the [Org Mode](https://orgmode.org/org.html) syntax), no backlinks, no graphs, no database; every note is a paragraph in its own text file.
+Each note (or *tile*, if you will) is a single paragraph stored in its own org file, organized through tags and bold keywords rather than hierarchies. TILES tries to keep it simple: there are no dependencies (except for Emacs, version 29.1 at least), no links between notes (except the [Org Mode](https://orgmode.org/org.html) syntax), no backlinks, no graphs, no database; every note is a paragraph in its own text file.
 
 I created this package because I wanted a note taking system with the following features:
 
@@ -16,7 +16,7 @@ I created this package because I wanted a note taking system with the following 
 - uses tags for hierarchy but also uses bold keywords (extracted automatically from words that are marked as bold);
 - can have follow-up text inside a note (and *undertile*, if you will), a kind of a meta-content (a private content inside a note), which is a paragraph prefixed with '&&' hidden everywhere (not exported with Dynamic Blocks actions) except expanded view in the dashboard and, of course, in note editing buffer;
 - search after tags and/or keywords only (who really wants to search for anything else?);
-- no external dependencies needed except at least version 27.1 of Emacs and Org Mode (built-in);
+- no external dependencies needed except at least version 29.1 of Emacs and Org Mode (built-in);
 - uses [Org Mode](https://orgmode.org/org.html) format for bold, italic, links, in-line footnotes;
 
 ## Screenshots
@@ -88,8 +88,6 @@ Clone the repository and add to your load path:
 (add-to-list 'load-path "/path/to/tiles")
 (require 'tiles)
 ```
-
-Both ways also bring warcel, in the `warcel/` folder, which the optional [archiving of linked pages](#archiving-linked-pages-optional) uses. TILES does not load it unless you turn archiving on.
 
 Set your notes directory (default `~/notes/tiles/`):
 
@@ -293,7 +291,7 @@ While editing a note, `M-x tiles-touch` updates the file's timestamp to the curr
 
 ### Archiving linked pages (optional)
 
-TILES can keep a copy of every web page a note links to, so the note still makes sense when the page changes or disappears. This is **off by default**: until you turn it on, nothing is downloaded, no archive list is shown under your notes, and warcel (the library that does the work) is not even loaded.
+TILES can keep a copy of every web page a note links to, so the note still makes sense when the page changes or disappears. This is **off by default**: until you turn it on, nothing is downloaded, no archive list is shown under your notes, and Emacs opens WARC files as it opens any other file.
 
 **Turning it on.** Add this line to your init file, before or after `(require 'tiles)`:
 
@@ -310,7 +308,7 @@ and, optionally, the sites and the kinds of files you never want archived (both 
 
 You can also turn it on in a running Emacs, with `M-x customize-variable RET tiles-archive-urls` or by evaluating the `setq` line above. To turn it off, set it back to `nil`: no more pages are downloaded and the lists are no longer shown, but the archives already made stay in `warc/` and come back if you turn it on again.
 
-**Requirements.** Archiving needs Emacs 29.1 or later and [warcel](warcel/), a reader and writer for WARC web archives that comes with TILES, in its `warcel/` folder. If you install TILES with `package-vc-install` or from a clone of this repository (see [Installation](#installation)), TILES finds warcel on its own. The MELPA package contains only `tiles.el`: to use archiving with it, clone this repository and add its `warcel/` folder to your `load-path`, e.g. `(add-to-list 'load-path "~/src/tiles/warcel")`. If warcel cannot be loaded, TILES shows a warning once and goes on working as usual, without archiving.
+Nothing else needs installing: TILES reads and writes WARC archives itself, with the zlib and libxml2 support built into most Emacs builds (check with `(zlib-available-p)` and `(libxml-available-p)`).
 
 **How it works.** Each time a note is saved (from capture, quick capture, or by editing it), the `http` and `https` links in it that are not archived yet are downloaded in the background, one WARC file per link, and saved next to your notes:
 
@@ -356,7 +354,39 @@ scripts/tiles-archive-existing.el --notes ~/notes/tiles --exclude example.com --
 
 It skips the links archived already, so it can be stopped and run again, and it lists at the end the links it could not archive. It turns archiving on by itself, so it works whatever your init file says.
 
-Once archiving is on, warcel's own commands are available too: open any archive with `M-x warcel-open` or `RET` in Dired, or save a page you are not linking from a note with `M-x warcel-capture`. See [warcel's README](warcel/README.md).
+### Viewing and capturing web archives
+
+The archives are standard WARC files, which other WARC tools read as well, and TILES has its own viewer for them. `RET` on an address below a note opens it; `M-x tiles-warc-open` asks for any `.warc` or `.warc.gz` file. While archiving is on, visiting a WARC file with `C-x C-f`, or `RET` on one in Dired, opens it in the viewer too, and `.warc.gz` files are read with Emacs's own zlib (otherwise Emacs runs the `gzip` program to read them, as it does for other compressed files).
+
+Scripts, styles, images, video, audio, frames and form controls are removed before a page is shown, so viewing a page never runs code or fetches anything from the network.
+
+An archive that holds a single page, as those of your notes do, opens on that page; other archives open on the list of their records. In a page, `^` lists the records of the archive, and `C-u M-x tiles-warc-open` lists them straight away. For large archives, `tiles-warc-open` is the better way in: it reads only the parts of the file it needs, while `C-x C-f` first reads the whole file, decompressed, into a buffer.
+
+**Org view (the default).** Pages become Org documents: headings, paragraphs, emphasis, code, links, lists, tables, quotes and preformatted text keep their meaning, and the page's address and capture date are in the property drawer. Only the main content is shown, as a browser's reading view shows it: the title of the article and its text, without the menus, headers, footers, sidebars, sharing buttons, related links, comments and cookie notices around it. `R` switches between that and the whole page (set `tiles-warc-readable` to `nil` to show whole pages by default). `RET` or a click on a link opens the archived copy of the linked page when the archive has one; `q` goes back, `e` shows the same page with EWW and `v` shows its source.
+
+**EWW view.** Pages are rendered by EWW, which keeps its usual commands (`l`/`r` back and forward, `R` readable view, `w` copy the URL). Following a link opens the archived copy of the linked page, `g` shows the page from the archive again, `^` lists the records and `o` shows the page as an Org document. Set `tiles-warc-default-view` to `eww` to open pages this way.
+
+**Links to pages that are not in the archive** follow `tiles-warc-follow-live-links`: `ask` (the default) asks before opening the live page with `browse-url`, `t` opens it without asking, `nil` only reports it.
+
+**The record list:**
+
+| Key   | Command                        |                                                                |
+|-------|--------------------------------|----------------------------------------------------------------|
+| `RET` | `tiles-warc-open-record`       | Show the record, as set by `tiles-warc-default-view`           |
+| `o`   | `tiles-warc-show-org`          | Show the page as an Org document                               |
+| `e`   | `tiles-warc-show-eww`          | Show the page with EWW                                         |
+| `v`   | `tiles-warc-view-source`       | Show the record as stored: WARC and HTTP headers, then payload |
+| `s`   | `tiles-warc-save-payload`      | Save the payload (decompressed) to a file                      |
+| `a`   | `tiles-warc-toggle-all-records`| List all records, or only the types in `tiles-warc-record-types` |
+| `/`   | `tiles-warc-filter`            | Only list records whose URI or content type match a regexp     |
+| `S`   | `tabulated-list-sort`          | Sort by the column at point                                    |
+| `g`   | `revert-buffer`                | Read the file again                                            |
+
+**Capturing a page by hand.** `M-x tiles-warc-capture` saves any web page in a new archive and shows it. It offers the URL in the clipboard, so copying a URL and pressing `RET` is enough. The archive goes in `tiles-warc-capture-directory` (the current directory when `nil`), named after the host and the time, such as `en.wikipedia.org-20260923-224650.warc.gz`; with `C-u`, it asks for the archive, and choosing an existing one adds the page to it. Pages are fetched by Emacs itself, without cookies, logins or JavaScript, and saved exactly as received, with the redirects that led to them, but without their images, styles and scripts. This works whether archiving is on or not.
+
+**Options** (`M-x customize-group RET tiles-warc`): `tiles-warc-readable`, `tiles-warc-default-view`, `tiles-warc-record-types`, `tiles-warc-follow-live-links`, `tiles-warc-capture-directory`, `tiles-warc-capture-compress` (`.warc.gz`, the default, or plain `.warc` files, for link archiving too), `tiles-warc-capture-timeout` (seconds to wait for a server that stopped sending data, 30) and `tiles-warc-capture-user-agent`.
+
+Supported: plain and gzip-compressed WARC files (one gzip member per record, the usual way, or several records per member, or one stream for the whole file), chunked and gzip/deflate-encoded HTTP payloads, and truncated files as far as they can be read. Not supported: Zstandard-compressed `.warc.zst` files, the older ARC format, and Brotli-encoded payloads.
 
 ### Org dynamic blocks
 
@@ -436,6 +466,7 @@ All settings are available via `M-x customize-group RET tiles`.
 | `tiles-archive-urls`   | Archive the web pages notes link to, in `warc/` (off by default, see [Archiving linked pages](#archiving-linked-pages-optional)) | `nil` |
 | `tiles-archive-exclude-hosts` | Hosts (and their subdomains) whose pages are not archived | `nil` |
 | `tiles-archive-exclude-file-types` | File extensions, such as `"pdf"`, whose files are not archived | `nil` |
+| `tiles-warc-…`         | Web archive viewer and capture (see [Viewing and capturing web archives](#viewing-and-capturing-web-archives)) | |
 
 ### Tag mode
 
